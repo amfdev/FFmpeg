@@ -62,6 +62,9 @@ typedef struct AmfContext {
     AVBufferRef        *hw_device_ctx; ///< pointer to HW accelerator (decoder)
     AVBufferRef        *hw_frames_ctx; ///< pointer to HW accelerator (frame allocator)
 
+    int                 hwsurfaces_in_queue;
+    int                 hwsurfaces_in_queue_max;
+
     // helpers to handle async calls
     int                 delayed_drain;
     AMFSurface         *delayed_surface;
@@ -140,7 +143,7 @@ extern const enum AVPixelFormat ff_amf_pix_fmts[];
 */
 #define AMF_RETURN_IF_FALSE(avctx, exp, ret_value, /*message,*/ ...) \
     if (!(exp)) { \
-        av_log(avctx, AV_LOG_ERROR, __VA_ARGS__); \
+        av_log(avctx, AV_LOG_FATAL, __VA_ARGS__); \
         return ret_value; \
     }
 
