@@ -24,6 +24,9 @@
 #if CONFIG_D3D11VA
 #include "libavutil/hwcontext_d3d11va.h"
 #endif
+#if CONFIG_DXVA2
+#include "libavutil/hwcontext_dxva2.h"
+#endif
 #include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/time.h"
@@ -51,6 +54,9 @@ const enum AVPixelFormat ff_amf_pix_fmts[] = {
 #if CONFIG_D3D11VA
     AV_PIX_FMT_D3D11,
 #endif
+#if CONFIG_DXVA2
+    AV_PIX_FMT_DXVA2_VLD,
+#endif
     AV_PIX_FMT_NONE
 };
 
@@ -69,6 +75,7 @@ static const FormatMap format_map[] =
     { AV_PIX_FMT_YUV420P,    AMF_SURFACE_YUV420P },
     { AV_PIX_FMT_YUYV422,    AMF_SURFACE_YUY2 },
     { AV_PIX_FMT_D3D11,      AMF_SURFACE_NV12 },
+    { AV_PIX_FMT_DXVA2_VLD,  AMF_SURFACE_NV12 },
 };
 
 
@@ -152,6 +159,23 @@ static int amf_load_library(AVCodecContext *avctx)
     return 0;
 }
 
+static void get_dx9_device_from_devmgr(IDirect3DDeviceManager9 *devmgr, IDirect3DDevice9 **device, void *avcl)
+{
+    HRESULT hr;
+    HANDLE device_handle;
+
+    if (SUCCEEDED(devmgr->lpVtbl->OpenDeviceHandle(devmgr, &device_handle))) {
+        if (SUCCEEDED(devmgr->lpVtbl->LockDevice(devmgr, device_handle, device, FALSE))) {
+            devmgr->lpVtbl->UnlockDevice(devmgr, device_handle, FALSE);
+        } else {
+            av_log(avcl, AV_LOG_INFO, "Failed to lock device handle for Direct3D9 device: %lx.\n", (unsigned long)hr);
+        }
+        devmgr->lpVtbl->CloseDeviceHandle(devmgr, device_handle);
+    } else {
+        av_log(avcl, AV_LOG_INFO, "Failed to open device handle for Direct3D9 device: %lx.\n", (unsigned long)hr);
+    }
+}
+
 static int amf_init_context(AVCodecContext *avctx)
 {
     AmfContext         *ctx = avctx->priv_data;
@@ -177,34 +201,58 @@ static int amf_init_context(AVCodecContext *avctx)
     res = ctx->factory->pVtbl->CreateContext(ctx->factory, &ctx->context);
     AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext() failed with error %d\n", res);
     // try to reuse existing DX device
-#if CONFIG_D3D11VA
     if (avctx->hw_frames_ctx) {
-        AVHWFramesContext *device_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
-        if (device_ctx->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
-            if (amf_av_to_amf_format(device_ctx->sw_format) != AMF_SURFACE_UNKNOWN) {
-                if (device_ctx->device_ctx->hwctx) {
-                    AVD3D11VADeviceContext *device_d3d11 = (AVD3D11VADeviceContext *)device_ctx->device_ctx->hwctx;
+        AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
+        if (amf_av_to_amf_format(frames_ctx->sw_format) != AMF_SURFACE_UNKNOWN) {
+            if (frames_ctx->device_ctx->hwctx) {
+#if CONFIG_D3D11VA
+                if (frames_ctx->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
+                    AVD3D11VADeviceContext *device_d3d11 = (AVD3D11VADeviceContext *)frames_ctx->device_ctx->hwctx;
                     res = ctx->context->pVtbl->InitDX11(ctx->context, device_d3d11->device, AMF_DX11_1);
                     if (res == AMF_OK) {
                         ctx->hw_frames_ctx = av_buffer_ref(avctx->hw_frames_ctx);
                         if (!ctx->hw_frames_ctx) {
                             return AVERROR(ENOMEM);
                         }
-                        if (device_ctx->initial_pool_size > 0)
-                            ctx->hwsurfaces_in_queue_max = device_ctx->initial_pool_size - 1;
+                        if (frames_ctx->initial_pool_size > 0)
+                            ctx->hwsurfaces_in_queue_max = frames_ctx->initial_pool_size - 1;
                     } else {
-                        if(res == AMF_NOT_SUPPORTED)
+                        if (res == AMF_NOT_SUPPORTED)
                             av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has D3D11 device which doesn't have D3D11VA interface, switching to default\n");
                         else
                             av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has non-AMD device, switching to default\n");
                     }
                 }
-            } else {
-                av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has format not uspported by AMF, switching to default\n");
+#endif
+#if CONFIG_DXVA2
+                if (frames_ctx->device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
+                    AVDXVA2DeviceContext *device_dxva2 = (AVDXVA2DeviceContext *)frames_ctx->device_ctx->hwctx;
+                    IDirect3DDevice9 *device_dx9 = NULL;
+                    get_dx9_device_from_devmgr(device_dxva2->devmgr, &device_dx9, avctx);
+                    res = ctx->context->pVtbl->InitDX9(ctx->context, device_dx9);
+                    device_dx9->lpVtbl->Release(device_dx9);
+                    if (res == AMF_OK) {
+                        ctx->hw_frames_ctx = av_buffer_ref(avctx->hw_frames_ctx);
+                        if (!ctx->hw_frames_ctx) {
+                            return AVERROR(ENOMEM);
+                        }
+                        if (frames_ctx->initial_pool_size > 0)
+                            ctx->hwsurfaces_in_queue_max = frames_ctx->initial_pool_size - 1;
+                    } else {
+                        if (res == AMF_NOT_SUPPORTED)
+                            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has D3D device which doesn't have DXVA2 interface, switching to default\n");
+                        else
+                            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has non-AMD device, switching to default\n");
+                    }
+                }
+#endif
             }
+        } else {
+            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has format not uspported by AMF, switching to default\n");
         }
     } else if (avctx->hw_device_ctx) {
         AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)(avctx->hw_device_ctx->data);
+#if CONFIG_D3D11VA
         if (device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
             if (device_ctx->hwctx) {
                 AVD3D11VADeviceContext *device_d3d11 = (AVD3D11VADeviceContext *)device_ctx->hwctx;
@@ -222,8 +270,28 @@ static int amf_init_context(AVCodecContext *avctx)
                 }
             }
         }
-    }
+#endif        
+#if CONFIG_DXVA2
+        if (device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
+            AVDXVA2DeviceContext *device_dxva2 = (AVDXVA2DeviceContext *)device_ctx->hwctx;
+            IDirect3DDevice9 *device_dx9 = NULL;
+            get_dx9_device_from_devmgr(device_dxva2->devmgr, &device_dx9, avctx);
+            res = ctx->context->pVtbl->InitDX9(ctx->context, device_dx9);
+            device_dx9->lpVtbl->Release(device_dx9);
+            if (res == AMF_OK) {
+                ctx->hw_device_ctx = av_buffer_ref(avctx->hw_device_ctx);
+                if (!ctx->hw_device_ctx) {
+                    return AVERROR(ENOMEM);
+                }
+            } else {
+                if (res == AMF_NOT_SUPPORTED)
+                    av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has D3D device which doesn't have DXVA2 interface, switching to default\n");
+                else
+                    av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has non-AMD device, switching to default\n");
+            }
+        }
 #endif
+    }
     if (!ctx->hw_frames_ctx && !ctx->hw_device_ctx) {
         res = ctx->context->pVtbl->InitDX11(ctx->context, NULL, AMF_DX11_1);
         if (res != AMF_OK) {
@@ -559,18 +627,31 @@ int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
             (AVHWDeviceContext*)ctx->hw_device_ctx->data)
         )) {
             AMFBuffer *frame_ref_storage_buffer;
-
 #if CONFIG_D3D11VA
-            static const GUID AMFTextureArrayIndexGUID = { 0x28115527, 0xe7c3, 0x4b66, { 0x99, 0xd3, 0x4f, 0x2a, 0xe6, 0xb4, 0x7f, 0xaf } };
-            ID3D11Texture2D *texture = (ID3D11Texture2D*)frame->data[0]; // actual texture
-            int index = (int)(size_t)frame->data[1]; // index is a slice in texture array is - set to tell AMF which slice to use
-            texture->lpVtbl->SetPrivateData(texture, &AMFTextureArrayIndexGUID, sizeof(index), &index);
+            if (((AVHWFramesContext*)frame->hw_frames_ctx->data)->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
+                static const GUID AMFTextureArrayIndexGUID = { 0x28115527, 0xe7c3, 0x4b66, { 0x99, 0xd3, 0x4f, 0x2a, 0xe6, 0xb4, 0x7f, 0xaf } };
 
-            res = ctx->context->pVtbl->CreateSurfaceFromDX11Native(ctx->context, texture, &surface, NULL); // wrap to AMF surface
-            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX11Native() failed  with error %d\n", res);
+                ID3D11Texture2D *texture = (ID3D11Texture2D*)frame->data[0]; // actual texture
+                int index = (int)(size_t)frame->data[1]; // index is a slice in texture array is - set to tell AMF which slice to use
+                texture->lpVtbl->SetPrivateData(texture, &AMFTextureArrayIndexGUID, sizeof(index), &index);
 
-            // input HW surfaces can be vertically aligned by 16; tell AMF the real size
-            surface->pVtbl->SetCrop(surface, 0, 0, frame->width, frame->height);
+                res = ctx->context->pVtbl->CreateSurfaceFromDX11Native(ctx->context, texture, &surface, NULL); // wrap to AMF surface
+                AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX11Native() failed  with error %d\n", res);
+
+                // input HW surfaces can be vertically aligned by 16; tell AMF the real size
+                surface->pVtbl->SetCrop(surface, 0, 0, frame->width, frame->height);
+            }
+#endif
+#if CONFIG_DXVA2
+            if (((AVHWFramesContext*)frame->hw_frames_ctx->data)->device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
+                IDirect3DSurface9 *texture = (IDirect3DSurface9*)frame->data[3]; // actual texture
+
+                res = ctx->context->pVtbl->CreateSurfaceFromDX9Native(ctx->context, texture, &surface, NULL); // wrap to AMF surface
+                AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX9Native() failed  with error %d\n", res);
+
+                // input HW surfaces can be vertically aligned by 16; tell AMF the real size
+                surface->pVtbl->SetCrop(surface, 0, 0, frame->width, frame->height);
+            }
 #endif
 
             frame_ref_storage_buffer = amf_create_buffer_with_frame_ref(frame, ctx->context);
