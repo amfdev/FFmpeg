@@ -74,8 +74,6 @@ static const FormatMap format_map[] =
     { AV_PIX_FMT_GRAY8,      AMF_SURFACE_GRAY8 },
     { AV_PIX_FMT_YUV420P,    AMF_SURFACE_YUV420P },
     { AV_PIX_FMT_YUYV422,    AMF_SURFACE_YUY2 },
-    { AV_PIX_FMT_D3D11,      AMF_SURFACE_NV12 },
-    { AV_PIX_FMT_DXVA2_VLD,  AMF_SURFACE_NV12 },
 };
 
 
@@ -159,13 +157,14 @@ static int amf_load_library(AVCodecContext *avctx)
     return 0;
 }
 
-static void get_dx9_device_from_devmgr(IDirect3DDeviceManager9 *devmgr, IDirect3DDevice9 **device, void *avcl)
+#if CONFIG_DXVA2
+static HRESULT get_dx9_device_from_devmgr(IDirect3DDeviceManager9 *devmgr, IDirect3DDevice9 **device, void *avcl)
 {
     HRESULT hr;
     HANDLE device_handle;
 
-    if (SUCCEEDED(devmgr->lpVtbl->OpenDeviceHandle(devmgr, &device_handle))) {
-        if (SUCCEEDED(devmgr->lpVtbl->LockDevice(devmgr, device_handle, device, FALSE))) {
+    if (SUCCEEDED(hr = devmgr->lpVtbl->OpenDeviceHandle(devmgr, &device_handle))) {
+        if (SUCCEEDED(hr = devmgr->lpVtbl->LockDevice(devmgr, device_handle, device, FALSE))) {
             devmgr->lpVtbl->UnlockDevice(devmgr, device_handle, FALSE);
         } else {
             av_log(avcl, AV_LOG_INFO, "Failed to lock device handle for Direct3D9 device: %lx.\n", (unsigned long)hr);
@@ -174,7 +173,9 @@ static void get_dx9_device_from_devmgr(IDirect3DDeviceManager9 *devmgr, IDirect3
     } else {
         av_log(avcl, AV_LOG_INFO, "Failed to open device handle for Direct3D9 device: %lx.\n", (unsigned long)hr);
     }
+    return hr;
 }
+#endif
 
 static int amf_init_context(AVCodecContext *avctx)
 {
@@ -218,9 +219,10 @@ static int amf_init_context(AVCodecContext *avctx)
                             ctx->hwsurfaces_in_queue_max = frames_ctx->initial_pool_size - 1;
                     } else {
                         if (res == AMF_NOT_SUPPORTED)
-                            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has D3D11 device which doesn't have D3D11VA interface, switching to default\n");
+                            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has D3D11 device which doesn't have D3D11VA interface\n");
                         else
-                            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has non-AMD device, switching to default\n");
+                            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has non-AMD device\n");
+                        return AVERROR(ENODEV);
                     }
                 }
 #endif
@@ -228,27 +230,29 @@ static int amf_init_context(AVCodecContext *avctx)
                 if (frames_ctx->device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
                     AVDXVA2DeviceContext *device_dxva2 = (AVDXVA2DeviceContext *)frames_ctx->device_ctx->hwctx;
                     IDirect3DDevice9 *device_dx9 = NULL;
-                    get_dx9_device_from_devmgr(device_dxva2->devmgr, &device_dx9, avctx);
-                    res = ctx->context->pVtbl->InitDX9(ctx->context, device_dx9);
-                    device_dx9->lpVtbl->Release(device_dx9);
-                    if (res == AMF_OK) {
-                        ctx->hw_frames_ctx = av_buffer_ref(avctx->hw_frames_ctx);
-                        if (!ctx->hw_frames_ctx) {
-                            return AVERROR(ENOMEM);
+                    if(SUCCEEDED(get_dx9_device_from_devmgr(device_dxva2->devmgr, &device_dx9, avctx))) {
+                        res = ctx->context->pVtbl->InitDX9(ctx->context, device_dx9);
+                        device_dx9->lpVtbl->Release(device_dx9);
+                        if (res == AMF_OK) {
+                            ctx->hw_frames_ctx = av_buffer_ref(avctx->hw_frames_ctx);
+                            if (!ctx->hw_frames_ctx) {
+                                return AVERROR(ENOMEM);
+                            }
+                            if (frames_ctx->initial_pool_size > 0)
+                                ctx->hwsurfaces_in_queue_max = frames_ctx->initial_pool_size - 1;
+                        } else {
+                            if (res == AMF_NOT_SUPPORTED)
+                                av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has D3D device which doesn't have DXVA2 interface\n");
+                            else
+                                av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has non-AMD device\n");
+                            return AVERROR(ENODEV);
                         }
-                        if (frames_ctx->initial_pool_size > 0)
-                            ctx->hwsurfaces_in_queue_max = frames_ctx->initial_pool_size - 1;
-                    } else {
-                        if (res == AMF_NOT_SUPPORTED)
-                            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has D3D device which doesn't have DXVA2 interface, switching to default\n");
-                        else
-                            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has non-AMD device, switching to default\n");
                     }
                 }
 #endif
             }
         } else {
-            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has format not uspported by AMF, switching to default\n");
+            av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has format not uspported by AMF\n");
         }
     } else if (avctx->hw_device_ctx) {
         AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)(avctx->hw_device_ctx->data);
@@ -264,9 +268,10 @@ static int amf_init_context(AVCodecContext *avctx)
                     }
                 } else {
                     if (res == AMF_NOT_SUPPORTED)
-                        av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has D3D11 device which doesn't have D3D11VA interface, switching to default\n");
+                        av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has D3D11 device which doesn't have D3D11VA interface\n");
                     else
-                        av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has non-AMD device, switching to default\n");
+                        av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has non-AMD device\n");
+                    return AVERROR(ENODEV);
                 }
             }
         }
@@ -275,19 +280,21 @@ static int amf_init_context(AVCodecContext *avctx)
         if (device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
             AVDXVA2DeviceContext *device_dxva2 = (AVDXVA2DeviceContext *)device_ctx->hwctx;
             IDirect3DDevice9 *device_dx9 = NULL;
-            get_dx9_device_from_devmgr(device_dxva2->devmgr, &device_dx9, avctx);
-            res = ctx->context->pVtbl->InitDX9(ctx->context, device_dx9);
-            device_dx9->lpVtbl->Release(device_dx9);
-            if (res == AMF_OK) {
-                ctx->hw_device_ctx = av_buffer_ref(avctx->hw_device_ctx);
-                if (!ctx->hw_device_ctx) {
-                    return AVERROR(ENOMEM);
+            if(SUCCEEDED(get_dx9_device_from_devmgr(device_dxva2->devmgr, &device_dx9, avctx))) {
+                res = ctx->context->pVtbl->InitDX9(ctx->context, device_dx9);
+                device_dx9->lpVtbl->Release(device_dx9);
+                if (res == AMF_OK) {
+                    ctx->hw_device_ctx = av_buffer_ref(avctx->hw_device_ctx);
+                    if (!ctx->hw_device_ctx) {
+                        return AVERROR(ENOMEM);
+                    }
+                } else {
+                    if (res == AMF_NOT_SUPPORTED)
+                        av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has D3D device which doesn't have DXVA2 interface\n");
+                    else
+                        av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has non-AMD device\n");
+                    return AVERROR(ENODEV);
                 }
-            } else {
-                if (res == AMF_NOT_SUPPORTED)
-                    av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has D3D device which doesn't have DXVA2 interface, switching to default\n");
-                else
-                    av_log(avctx, AV_LOG_INFO, "avctx->hw_device_ctx has non-AMD device, switching to default\n");
             }
         }
 #endif
@@ -296,7 +303,7 @@ static int amf_init_context(AVCodecContext *avctx)
         res = ctx->context->pVtbl->InitDX11(ctx->context, NULL, AMF_DX11_1);
         if (res != AMF_OK) {
             res = ctx->context->pVtbl->InitDX9(ctx->context, NULL);
-            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "InitDX9() failed with error %d\n", res);
+            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENODEV), "InitDX9() failed with error %d\n", res);
         }
     }
     return 0;
@@ -320,7 +327,7 @@ static int amf_init_encoder(AVCodecContext *avctx)
     }
     AMF_RETURN_IF_FALSE(ctx, codec_id != NULL, AVERROR(EINVAL), "Codec %d is not supported\n", avctx->codec->id);
 
-    ctx->format = amf_av_to_amf_format(avctx->pix_fmt);
+    ctx->format = amf_av_to_amf_format(avctx->sw_pix_fmt);
     AMF_RETURN_IF_FALSE(ctx, ctx->format != AMF_SURFACE_UNKNOWN, AVERROR(EINVAL), "Format %d is not supported\n", avctx->pix_fmt);
 
     res = ctx->factory->pVtbl->CreateComponent(ctx->factory, ctx->context, codec_id, &ctx->encoder);
