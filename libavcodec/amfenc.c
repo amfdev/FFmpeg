@@ -644,7 +644,7 @@ int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
             if (((AVHWFramesContext *)frame->hw_frames_ctx->data)->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
                 static const GUID AMFTextureArrayIndexGUID = { 0x28115527, 0xe7c3, 0x4b66, { 0x99, 0xd3, 0x4f, 0x2a, 0xe6, 0xb4, 0x7f, 0xaf } };
 
-                ID3D11Texture2D *texture = (ID3D11Texture2D*)frame->data[0]; // actual texture
+                ID3D11Texture2D *texture = (ID3D11Texture2D *)frame->data[0]; // actual texture
                 int index = (int)(size_t)frame->data[1]; // index is a slice in texture array is - set to tell AMF which slice to use
                 texture->lpVtbl->SetPrivateData(texture, &AMFTextureArrayIndexGUID, sizeof(index), &index);
 
@@ -657,7 +657,7 @@ int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
 #endif
 #if CONFIG_DXVA2
             if (((AVHWFramesContext *)frame->hw_frames_ctx->data)->device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
-                IDirect3DSurface9 *texture = (IDirect3DSurface9*)frame->data[3]; // actual texture
+                IDirect3DSurface9 *texture = (IDirect3DSurface9 *)frame->data[3]; // actual texture
 
                 res = ctx->context->pVtbl->CreateSurfaceFromDX9Native(ctx->context, texture, &surface, NULL); // wrap to AMF surface
                 AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "CreateSurfaceFromDX9Native() failed  with error %d\n", res);
