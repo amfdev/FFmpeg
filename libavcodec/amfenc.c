@@ -203,7 +203,7 @@ static int amf_init_context(AVCodecContext *avctx)
     AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext() failed with error %d\n", res);
     // try to reuse existing DX device
     if (avctx->hw_frames_ctx) {
-        AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->hw_frames_ctx->data;
+        AVHWFramesContext *frames_ctx = (AVHWFramesContext *)avctx->hw_frames_ctx->data;
         if (amf_av_to_amf_format(frames_ctx->sw_format) != AMF_SURFACE_UNKNOWN) {
             if (frames_ctx->device_ctx->hwctx) {
 #if CONFIG_D3D11VA
@@ -255,7 +255,7 @@ static int amf_init_context(AVCodecContext *avctx)
             av_log(avctx, AV_LOG_INFO, "avctx->hw_frames_ctx has format not uspported by AMF\n");
         }
     } else if (avctx->hw_device_ctx) {
-        AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)(avctx->hw_device_ctx->data);
+        AVHWDeviceContext *device_ctx = (AVHWDeviceContext *)(avctx->hw_device_ctx->data);
 #if CONFIG_D3D11VA
         if (device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
             if (device_ctx->hwctx) {
@@ -314,6 +314,7 @@ static int amf_init_encoder(AVCodecContext *avctx)
     AmfContext          *ctx = avctx->priv_data;
     const wchar_t       *codec_id = NULL;
     AMF_RESULT           res = AMF_OK;
+    enum AVPixelFormat   pix_fmt;
 
     switch (avctx->codec->id) {
         case AV_CODEC_ID_H264:
@@ -327,8 +328,13 @@ static int amf_init_encoder(AVCodecContext *avctx)
     }
     AMF_RETURN_IF_FALSE(ctx, codec_id != NULL, AVERROR(EINVAL), "Codec %d is not supported\n", avctx->codec->id);
 
-    ctx->format = amf_av_to_amf_format(avctx->sw_pix_fmt);
-    AMF_RETURN_IF_FALSE(ctx, ctx->format != AMF_SURFACE_UNKNOWN, AVERROR(EINVAL), "Format %d is not supported\n", avctx->pix_fmt);
+    if(is_hwaccel_pix_fmt(avctx->pix_fmt)) {
+        pix_fmt = avctx->sw_pix_fmt;
+    } else {
+        pix_fmt = avctx->pix_fmt;
+    }
+    ctx->format = amf_av_to_amf_format(pix_fmt);
+    AMF_RETURN_IF_FALSE(ctx, ctx->format != AMF_SURFACE_UNKNOWN, AVERROR(EINVAL), "Format %d is not supported\n", pix_fmt);
 
     res = ctx->factory->pVtbl->CreateComponent(ctx->factory, ctx->context, codec_id, &ctx->encoder);
     AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_ENCODER_NOT_FOUND, "CreateComponent(%ls) failed with error %d\n", codec_id, res);
@@ -630,12 +636,12 @@ int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
             // check if the same hw_frames_ctx as used in initialization
             (ctx->hw_frames_ctx && frame->hw_frames_ctx->data == ctx->hw_frames_ctx->data) ||
             // check if the same hw_device_ctx as used in initialization
-            (ctx->hw_device_ctx && ((AVHWFramesContext*)frame->hw_frames_ctx->data)->device_ctx ==
-            (AVHWDeviceContext*)ctx->hw_device_ctx->data)
+            (ctx->hw_device_ctx && ((AVHWFramesContext *)frame->hw_frames_ctx->data)->device_ctx ==
+            (AVHWDeviceContext *)ctx->hw_device_ctx->data)
         )) {
             AMFBuffer *frame_ref_storage_buffer;
 #if CONFIG_D3D11VA
-            if (((AVHWFramesContext*)frame->hw_frames_ctx->data)->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
+            if (((AVHWFramesContext *)frame->hw_frames_ctx->data)->device_ctx->type == AV_HWDEVICE_TYPE_D3D11VA) {
                 static const GUID AMFTextureArrayIndexGUID = { 0x28115527, 0xe7c3, 0x4b66, { 0x99, 0xd3, 0x4f, 0x2a, 0xe6, 0xb4, 0x7f, 0xaf } };
 
                 ID3D11Texture2D *texture = (ID3D11Texture2D*)frame->data[0]; // actual texture
@@ -650,7 +656,7 @@ int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
             }
 #endif
 #if CONFIG_DXVA2
-            if (((AVHWFramesContext*)frame->hw_frames_ctx->data)->device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
+            if (((AVHWFramesContext *)frame->hw_frames_ctx->data)->device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
                 IDirect3DSurface9 *texture = (IDirect3DSurface9*)frame->data[3]; // actual texture
 
                 res = ctx->context->pVtbl->CreateSurfaceFromDX9Native(ctx->context, texture, &surface, NULL); // wrap to AMF surface
