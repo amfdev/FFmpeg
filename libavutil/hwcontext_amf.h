@@ -30,17 +30,10 @@
  *
  */
 
-typedef struct AVAMFFrameDescriptor {
-    AMFSurface *surface;
-} AVAMFFrameDescriptor;
-
-
 typedef struct AVAMFDeviceContext {
     AMFContext *context;
     AMFFactory *factory;
 } AVAMFDeviceContext;
-
-
 
 
 #endif /* AVUTIL_HWCONTEXT_AMF_H */
