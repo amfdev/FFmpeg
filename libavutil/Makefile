@@ -168,6 +168,7 @@ OBJS-$(CONFIG_VAAPI)                    += hwcontext_vaapi.o
 OBJS-$(CONFIG_VIDEOTOOLBOX)             += hwcontext_videotoolbox.o
 OBJS-$(CONFIG_VDPAU)                    += hwcontext_vdpau.o
 OBJS-$(CONFIG_MEDIACODEC)               += hwcontext_mediacodec.o
+OBJS-$(CONFIG_AMF)                      += hwcontext_amf.o
 
 OBJS += $(COMPAT_OBJS:%=../compat/%)
 
@@ -183,6 +184,8 @@ SKIPHEADERS-$(CONFIG_OPENCL)           += hwcontext_opencl.h
 SKIPHEADERS-$(CONFIG_VAAPI)            += hwcontext_vaapi.h
 SKIPHEADERS-$(CONFIG_VIDEOTOOLBOX)     += hwcontext_videotoolbox.h
 SKIPHEADERS-$(CONFIG_VDPAU)            += hwcontext_vdpau.h
+SKIPHEADERS-$(CONFIG_AMF)              += hwcontext_amf.h
+SKIPHEADERS-$(CONFIG_AMF)              += hwcontext_amf_internal.h
 
 TESTPROGS = adler32                                                     \
             aes                                                         \
