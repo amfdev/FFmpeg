@@ -185,7 +185,6 @@ SKIPHEADERS-$(CONFIG_VAAPI)            += hwcontext_vaapi.h
 SKIPHEADERS-$(CONFIG_VIDEOTOOLBOX)     += hwcontext_videotoolbox.h
 SKIPHEADERS-$(CONFIG_VDPAU)            += hwcontext_vdpau.h
 SKIPHEADERS-$(CONFIG_AMF)              += hwcontext_amf.h
-SKIPHEADERS-$(CONFIG_AMF)              += hwcontext_amf_internal.h
 
 TESTPROGS = adler32                                                     \
             aes                                                         \

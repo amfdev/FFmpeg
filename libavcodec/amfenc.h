@@ -19,8 +19,6 @@
 #ifndef AVCODEC_AMFENC_H
 #define AVCODEC_AMFENC_H
 
-#include <AMF/core/Factory.h>
-
 #include <AMF/components/VideoEncoderVCE.h>
 #include <AMF/components/VideoEncoderHEVC.h>
 

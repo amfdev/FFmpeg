@@ -36,13 +36,6 @@
 #include "libavutil/hwcontext_dxva2.h"
 #endif
 
-#if CONFIG_OPENCL
-#include "libavutil/hwcontext_opencl.h"
-#endif
-
-#include <AMF/core/Factory.h>
-
-
 #ifdef _WIN32
 #include "compat/w32dlfcn.h"
 #else
@@ -79,6 +72,7 @@ static AMFTraceWriterVtbl tracer_vtbl =
     .Write = AMFTraceWriter_Write,
     .Flush = AMFTraceWriter_Flush,
 };
+
 #define AMFAV_WRITER_ID L"avlog"
 
 static const AVClass amflib_class = {
@@ -116,15 +110,13 @@ static void amf_library_ctx_free(void *opaque, uint8_t *data)
 static AVBufferRef *amf_library_ctx_alloc(void)
 {
     AVBufferRef *buf;
-    AMFLibrary *ctx;
+    AMFLibrary  *ctx;
 
     ctx = av_mallocz(sizeof(*ctx));
     if (!ctx)
         return NULL;
 
-    buf = av_buffer_create((uint8_t*)ctx, sizeof(*ctx),
-                           amf_library_ctx_free, NULL,
-                           AV_BUFFER_FLAG_READONLY);
+    buf = av_buffer_create((uint8_t*)ctx, sizeof(*ctx), amf_library_ctx_free, NULL, AV_BUFFER_FLAG_READONLY);
     return buf;
 }
 
@@ -136,8 +128,7 @@ static int amf_init_library(AMFLibrary *ctx)
 
     ctx->avclass = &amflib_class;
     ctx->library = dlopen(AMF_DLL_NAMEA, RTLD_NOW | RTLD_LOCAL);
-    AMFAV_RETURN_IF_FALSE(ctx, ctx->library != NULL,
-        AVERROR_UNKNOWN, "DLL %s failed to open\n", AMF_DLL_NAMEA);
+    AMFAV_RETURN_IF_FALSE(ctx, ctx->library != NULL, AVERROR_UNKNOWN, "DLL %s failed to open\n", AMF_DLL_NAMEA);
 
     init_fun = (AMFInit_Fn)dlsym(ctx->library, AMF_INIT_FUNCTION_NAME);
     AMFAV_RETURN_IF_FALSE(ctx, init_fun != NULL, AVERROR_UNKNOWN, "DLL %s failed to find function %s\n", AMF_DLL_NAMEA, AMF_INIT_FUNCTION_NAME);
@@ -154,16 +145,14 @@ static int amf_init_library(AMFLibrary *ctx)
     res = ctx->factory->pVtbl->GetDebug(ctx->factory, &ctx->debug);
     AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "GetDebug() failed with error %d\n", res);
 
-
     ctx->trace->pVtbl->EnableWriter(ctx->trace, AMF_TRACE_WRITER_CONSOLE, 0);
     ctx->trace->pVtbl->SetGlobalLevel(ctx->trace, AMF_TRACE_TRACE);
 
     // connect AMF logger to av_log
     ctx->tracer.vtbl = &tracer_vtbl;
-    ctx->tracer.avcl = NULL;// todo
+    ctx->tracer.avcl = ctx;
     ctx->trace->pVtbl->RegisterWriter(ctx->trace, AMFAV_WRITER_ID, (AMFTraceWriter*)&ctx->tracer, 1);
     ctx->trace->pVtbl->SetWriterLevel(ctx->trace, AMFAV_WRITER_ID, AMF_TRACE_TRACE);
-
     return 0;
 }
 
@@ -184,7 +173,6 @@ static AVBufferRef *aquire_amf_library_ctx(void)
     } else {
         ret = av_buffer_ref(amf_library_ctx);
     }
-    
     return ret;
 }
 
@@ -231,7 +219,6 @@ static int amf_device_create(AVHWDeviceContext *ctx, const char *device,
             return AVERROR(ENOSYS);
         }
     }
-   
     return 0;
 }
 
