@@ -52,8 +52,8 @@
     }
 
 typedef struct AmfTraceWriter {
-    AMFTraceWriterVtbl  *vtbl;
-    void                *avcl;
+    const AMFTraceWriterVtbl    *vtbl;
+    void                        *avcl;
 } AmfTraceWriter;
 
 static void AMF_CDECL_CALL AMFTraceWriter_Write(AMFTraceWriter *pThis,
@@ -67,7 +67,7 @@ static void AMF_CDECL_CALL AMFTraceWriter_Flush(AMFTraceWriter *pThis)
 {
 }
 
-static AMFTraceWriterVtbl tracer_vtbl =
+static const AMFTraceWriterVtbl tracer_vtbl =
 {
     .Write = AMFTraceWriter_Write,
     .Flush = AMFTraceWriter_Flush,
@@ -75,123 +75,44 @@ static AMFTraceWriterVtbl tracer_vtbl =
 
 #define AMFAV_WRITER_ID L"avlog"
 
-static const AVClass amflib_class = {
-    .class_name = "amf",
-    .item_name = av_default_item_name,
-    .version = LIBAVUTIL_VERSION_INT,
-};
-
-typedef struct AMFLibrary {
-    const AVClass      *avclass;
+typedef struct AMFDeviceContextPrivate {
     amf_handle          library;
-    AMFFactory         *factory;
     AMFDebug           *debug;
     AMFTrace           *trace;
-
-    amf_uint64          version;
     AmfTraceWriter      tracer;
-
-} AMFLibrary;
-
-static void amf_library_ctx_free(void *opaque, uint8_t *data)
-{
-    AMFLibrary *ctx = (AMFLibrary*)data;
-
-    if (ctx->trace) {
-        ctx->trace->pVtbl->UnregisterWriter(ctx->trace, AMFAV_WRITER_ID);
-    }
-    if (ctx->library) {
-        dlclose(ctx->library);
-    }
-
-    av_freep(&ctx);
-}
-
-static AVBufferRef *amf_library_ctx_alloc(void)
-{
-    AVBufferRef *buf;
-    AMFLibrary  *ctx;
-
-    ctx = av_mallocz(sizeof(*ctx));
-    if (!ctx)
-        return NULL;
-
-    buf = av_buffer_create((uint8_t*)ctx, sizeof(*ctx), amf_library_ctx_free, NULL, AV_BUFFER_FLAG_READONLY);
-    return buf;
-}
-
-static int amf_init_library(AMFLibrary *ctx)
-{
-    AMFInit_Fn              init_fun = NULL;
-    AMFQueryVersion_Fn      version_fun = NULL;
-    AMF_RESULT              res = AMF_OK;
-
-    ctx->avclass = &amflib_class;
-    ctx->library = dlopen(AMF_DLL_NAMEA, RTLD_NOW | RTLD_LOCAL);
-    AMFAV_RETURN_IF_FALSE(ctx, ctx->library != NULL, AVERROR_UNKNOWN, "DLL %s failed to open\n", AMF_DLL_NAMEA);
-
-    init_fun = (AMFInit_Fn)dlsym(ctx->library, AMF_INIT_FUNCTION_NAME);
-    AMFAV_RETURN_IF_FALSE(ctx, init_fun != NULL, AVERROR_UNKNOWN, "DLL %s failed to find function %s\n", AMF_DLL_NAMEA, AMF_INIT_FUNCTION_NAME);
-
-    version_fun = (AMFQueryVersion_Fn)dlsym(ctx->library, AMF_QUERY_VERSION_FUNCTION_NAME);
-    AMFAV_RETURN_IF_FALSE(ctx, version_fun != NULL, AVERROR_UNKNOWN, "DLL %s failed to find function %s\n", AMF_DLL_NAMEA, AMF_QUERY_VERSION_FUNCTION_NAME);
-
-    res = version_fun(&ctx->version);
-    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "%s failed with error %d\n", AMF_QUERY_VERSION_FUNCTION_NAME, res);
-    res = init_fun(AMF_FULL_VERSION, &ctx->factory);
-    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "%s failed with error %d\n", AMF_INIT_FUNCTION_NAME, res);
-    res = ctx->factory->pVtbl->GetTrace(ctx->factory, &ctx->trace);
-    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "GetTrace() failed with error %d\n", res);
-    res = ctx->factory->pVtbl->GetDebug(ctx->factory, &ctx->debug);
-    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "GetDebug() failed with error %d\n", res);
-
-    ctx->trace->pVtbl->EnableWriter(ctx->trace, AMF_TRACE_WRITER_CONSOLE, 0);
-    ctx->trace->pVtbl->SetGlobalLevel(ctx->trace, AMF_TRACE_TRACE);
-
-    // connect AMF logger to av_log
-    ctx->tracer.vtbl = &tracer_vtbl;
-    ctx->tracer.avcl = ctx;
-    ctx->trace->pVtbl->RegisterWriter(ctx->trace, AMFAV_WRITER_ID, (AMFTraceWriter*)&ctx->tracer, 1);
-    ctx->trace->pVtbl->SetWriterLevel(ctx->trace, AMFAV_WRITER_ID, AMF_TRACE_TRACE);
-    return 0;
-}
-
-static AVBufferRef *amf_library_ctx = NULL;
-static AVBufferRef *aquire_amf_library_ctx(void)
-{
-    AVBufferRef *ret = NULL;
-    if (amf_library_ctx == NULL)
-    {
-        ret = amf_library_ctx_alloc();
-        if(amf_init_library((AMFLibrary *)ret->data) < 0)
-        {
-            av_buffer_unref(&amf_library_ctx);
-            ret = NULL;
-        } else {
-            amf_library_ctx = ret;
-        }
-    } else {
-        ret = av_buffer_ref(amf_library_ctx);
-    }
-    return ret;
-}
-
-typedef struct AVAMFDeviceContextPrivate {
-    AMFLibrary *lib;
-    AVBufferRef *lib_ref;
-} AVAMFDeviceContextPrivate;
+} AMFDeviceContextPrivate;
 
 static int amf_init_device_ctx_object(AVHWDeviceContext *ctx)
 {
-    AVAMFDeviceContext *hwctx = ctx->hwctx;
-    AVAMFDeviceContextPrivate *priv = ctx->internal->priv;
-    AMF_RESULT res;
+    AVAMFDeviceContext         *hwctx = ctx->hwctx;
+    AMFDeviceContextPrivate    *priv = ctx->internal->priv;
+    AMF_RESULT                  res;
+    AMFInit_Fn                  init_fun;
 
-    priv->lib_ref = aquire_amf_library_ctx();
-    priv->lib = (AMFLibrary*)priv->lib_ref->data;
+    priv->library = dlopen(AMF_DLL_NAMEA, RTLD_NOW | RTLD_LOCAL);
+    AMFAV_RETURN_IF_FALSE(ctx, priv->library != NULL, AVERROR_UNKNOWN, "DLL %s failed to open\n", AMF_DLL_NAMEA);
 
-    res = priv->lib->factory->pVtbl->CreateContext(priv->lib->factory, &hwctx->context);
-    hwctx->factory = priv->lib->factory;
+    init_fun = (AMFInit_Fn)dlsym(priv->library, AMF_INIT_FUNCTION_NAME);
+    AMFAV_RETURN_IF_FALSE(ctx, init_fun != NULL, AVERROR_UNKNOWN, "DLL %s failed to find function %s\n", AMF_DLL_NAMEA, AMF_INIT_FUNCTION_NAME);
+
+    res = init_fun(AMF_FULL_VERSION, &hwctx->factory);
+    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "%s failed with error %d\n", AMF_INIT_FUNCTION_NAME, res);
+
+    res = hwctx->factory->pVtbl->GetTrace(hwctx->factory, &priv->trace);
+    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "GetTrace() failed with error %d\n", res);
+    res = hwctx->factory->pVtbl->GetDebug(hwctx->factory, &priv->debug);
+    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "GetDebug() failed with error %d\n", res);
+
+    priv->trace->pVtbl->EnableWriter(priv->trace, AMF_TRACE_WRITER_CONSOLE, 0);
+    priv->trace->pVtbl->SetGlobalLevel(priv->trace, AMF_TRACE_TRACE);
+
+    // connect AMF logger to av_log
+    priv->tracer.vtbl = &tracer_vtbl;
+    priv->tracer.avcl = ctx;
+    priv->trace->pVtbl->RegisterWriter(priv->trace, AMFAV_WRITER_ID, (AMFTraceWriter*)&priv->tracer, 1);
+    priv->trace->pVtbl->SetWriterLevel(priv->trace, AMFAV_WRITER_ID, AMF_TRACE_TRACE);
+
+    res = hwctx->factory->pVtbl->CreateContext(hwctx->factory, &hwctx->context);
     AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext() failed with error %d\n", res);
     return 0;
 }
@@ -306,14 +227,16 @@ static int amf_device_derive(AVHWDeviceContext *dst_ctx,
 
 static void amf_device_uninit(AVHWDeviceContext *ctx)
 {
-    AVAMFDeviceContext *amf_ctx = ctx->hwctx;
-    AVAMFDeviceContextPrivate *priv = ctx->internal->priv;
+    AVAMFDeviceContext      *amf_ctx = ctx->hwctx;
+    AMFDeviceContextPrivate *priv = ctx->internal->priv;
     if (amf_ctx->context) {
         amf_ctx->context->pVtbl->Terminate(amf_ctx->context);
         amf_ctx->context->pVtbl->Release(amf_ctx->context);
         amf_ctx->context = NULL;
     }
-    av_buffer_unref(&priv->lib_ref);
+    if(priv->library) {
+        dlclose(priv->library);
+    }
 }
 
 const HWContextType ff_hwcontext_type_amf = {
@@ -321,7 +244,7 @@ const HWContextType ff_hwcontext_type_amf = {
     .name                   = "AMF",
 
     .device_hwctx_size      = sizeof(AVAMFDeviceContext),
-    .device_priv_size       = sizeof(AVAMFDeviceContextPrivate),
+    .device_priv_size       = sizeof(AMFDeviceContextPrivate),
 
     .device_create          = &amf_device_create,
     .device_derive          = &amf_device_derive,

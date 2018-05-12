@@ -84,7 +84,8 @@ static enum AMF_SURFACE_FORMAT amf_av_to_amf_format(enum AVPixelFormat fmt)
 static int amf_init_context(AVCodecContext *avctx)
 {
     AmfContext *ctx = avctx->priv_data;
-    av_unused int ret;
+    AVAMFDeviceContext *amf_ctx;
+    int ret;
 
     ctx->delayed_frame = av_frame_alloc();
     if (!ctx->delayed_frame) {
@@ -137,13 +138,9 @@ static int amf_init_context(AVCodecContext *avctx)
             return ret;
     }
 
-    if(ctx->amf_device_ctx)
-    {
-        AVHWDeviceContext *avhwctx =  (AVHWDeviceContext*)ctx->amf_device_ctx->data;
-        AVAMFDeviceContext *amf_ctx = avhwctx->hwctx;
-        ctx->context = amf_ctx->context;
-        ctx->factory = amf_ctx->factory;
-    }
+    amf_ctx = ((AVHWDeviceContext*)ctx->amf_device_ctx->data)->hwctx;
+    ctx->context = amf_ctx->context;
+    ctx->factory = amf_ctx->factory;
     return 0;
 }
 
