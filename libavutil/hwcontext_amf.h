@@ -37,7 +37,7 @@
 typedef struct AVAMFDeviceContext {
     /**
      * Context used for:
-     * texture and buffers allocation. 
+     * texture and buffers allocation.
      * Access to device objects (DX9, DX11, OpenCL, OpenGL) which are being used in the context
      */
     AMFContext *context;
