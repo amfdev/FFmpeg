@@ -91,7 +91,7 @@ static int amf_init_context(AVCodecContext *avctx)
     if (!ctx->delayed_frame) {
         return AVERROR(ENOMEM);
     }
-    
+
     // hardcoded to current HW queue size - will realloc in timestamp_queue_enqueue() if too small
     ctx->timestamp_list = av_fifo_alloc((avctx->max_b_frames + 16) * sizeof(int64_t));
     if (!ctx->timestamp_list) {
