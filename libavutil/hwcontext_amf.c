@@ -82,12 +82,28 @@ typedef struct AMFDeviceContextPrivate {
     AmfTraceWriter      tracer;
 } AMFDeviceContextPrivate;
 
+static void amf_device_free(AVHWDeviceContext *ctx)
+{
+    AVAMFDeviceContext      *amf_ctx = ctx->hwctx;
+    AMFDeviceContextPrivate *priv = ctx->internal->priv;
+    if (amf_ctx->context) {
+        amf_ctx->context->pVtbl->Terminate(amf_ctx->context);
+        amf_ctx->context->pVtbl->Release(amf_ctx->context);
+        amf_ctx->context = NULL;
+    }
+    if(priv->library) {
+        dlclose(priv->library);
+    }
+}
+
 static int amf_init_device_ctx_object(AVHWDeviceContext *ctx)
 {
     AVAMFDeviceContext         *hwctx = ctx->hwctx;
     AMFDeviceContextPrivate    *priv = ctx->internal->priv;
     AMF_RESULT                  res;
     AMFInit_Fn                  init_fun;
+
+    ctx->free = amf_device_free;
 
     priv->library = dlopen(AMF_DLL_NAMEA, RTLD_NOW | RTLD_LOCAL);
     AMFAV_RETURN_IF_FALSE(ctx, priv->library != NULL, AVERROR_UNKNOWN, "DLL %s failed to open\n", AMF_DLL_NAMEA);
@@ -225,20 +241,6 @@ static int amf_device_derive(AVHWDeviceContext *dst_ctx,
     return 0;
 }
 
-static void amf_device_uninit(AVHWDeviceContext *ctx)
-{
-    AVAMFDeviceContext      *amf_ctx = ctx->hwctx;
-    AMFDeviceContextPrivate *priv = ctx->internal->priv;
-    if (amf_ctx->context) {
-        amf_ctx->context->pVtbl->Terminate(amf_ctx->context);
-        amf_ctx->context->pVtbl->Release(amf_ctx->context);
-        amf_ctx->context = NULL;
-    }
-    if(priv->library) {
-        dlclose(priv->library);
-    }
-}
-
 const HWContextType ff_hwcontext_type_amf = {
     .type                   = AV_HWDEVICE_TYPE_AMF,
     .name                   = "AMF",
@@ -248,5 +250,4 @@ const HWContextType ff_hwcontext_type_amf = {
 
     .device_create          = &amf_device_create,
     .device_derive          = &amf_device_derive,
-    .device_uninit          = &amf_device_uninit,
 };

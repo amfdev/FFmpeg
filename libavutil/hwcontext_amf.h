@@ -35,7 +35,18 @@
  * This struct is allocated as AVHWDeviceContext.hwctx
  */
 typedef struct AVAMFDeviceContext {
+    /**
+     * Context used for:
+     * texture and buffers allocation. 
+     * Access to device objects (DX9, DX11, OpenCL, OpenGL) which are being used in the context
+     */
     AMFContext *context;
+
+    /**
+     * Factory used for:
+     * AMF component creation such as encoder, decoder, converter...
+     * Access AMF Library settings such as trace/debug/cache
+     */
     AMFFactory *factory;
 } AVAMFDeviceContext;
 
