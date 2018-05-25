@@ -323,8 +323,8 @@ static int amf_scale_config_output(AVFilterLink *outlink)
         pix_fmt_in = inlink->format;
     }
 
-    outlink->w = inlink->w;
-    outlink->h = inlink->h;
+    outlink->w = inlink->w*2;
+    outlink->h = inlink->h*2;
 
     ctx->hwframes->width     = outlink->w;
     ctx->hwframes->height    = outlink->h;
@@ -351,20 +351,21 @@ static int amf_scale_config_output(AVFilterLink *outlink)
     res = ctx->factory->pVtbl->CreateComponent(ctx->factory, ctx->context, AMFVideoConverter, &ctx->converter);
     AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_ENCODER_NOT_FOUND, "CreateComponent(%ls) failed with error %d\n", AMFVideoConverter, res);
 
-    //ctx->converter->pVtbl->SetOutputDataAllocatorCB(ctx->converter, (AMFDataAllocatorCB*)&ctx->allocator);
-    //AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SetOutputDataAllocatorCB() failed with error %d\n", res);
+    ctx->converter->pVtbl->SetOutputDataAllocatorCB(ctx->converter, (AMFDataAllocatorCB*)&ctx->allocator);
+    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SetOutputDataAllocatorCB() failed with error %d\n", res);
 
+    AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_FORMAT, (amf_int32)amf_av_to_amf_format(ctx->hwframes->sw_format));
+    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
+
+    AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_MEMORY_TYPE, (amf_int32)AMF_MEMORY_DX11);//FIX ME
+    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
+
+    AMFSize out_sz = { outlink->w, outlink->h };
+    AMF_ASSIGN_PROPERTY_SIZE(res, ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_SIZE, out_sz);
 
     res = ctx->converter->pVtbl->Init(ctx->converter, amf_av_to_amf_format(pix_fmt_in), inlink->w, inlink->h);
     AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-Init() failed with error %d\n", res);
 
-    AMF_SURFACE_FORMAT pix_fmt_out = amf_av_to_amf_format(ctx->hwframes->sw_format);
-
-    AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_FORMAT, (amf_int32)pix_fmt_out);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
-
-    AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_MEMORY_TYPE, (amf_int32)AMF_MEMORY_DX11);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
 
     AMFVariantStruct vs;
     res = ctx->converter->pVtbl->GetProperty(ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_FORMAT, &vs);
