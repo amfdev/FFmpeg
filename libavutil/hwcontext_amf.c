@@ -88,7 +88,7 @@ static void amf_device_free(AVHWDeviceContext *ctx)
     AMFDeviceContextPrivate *priv = ctx->internal->priv;
     if (amf_ctx->context) {
         amf_ctx->context->pVtbl->Terminate(amf_ctx->context);
-        //amf_ctx->context->pVtbl->Release(amf_ctx->context);
+        amf_ctx->context->pVtbl->Release(amf_ctx->context);
         amf_ctx->context = NULL;
     }
     if(priv->library) {
