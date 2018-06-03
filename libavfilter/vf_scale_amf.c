@@ -153,7 +153,7 @@ typedef struct AMFScaleContext {
     char *format_str;
 
     AMFComponent         *converter; ///< AMF encoder object
-    AMFDataAllocatorImpl  allocator;
+//    AMFDataAllocatorImpl  allocator;
 
     AVBufferRef        *amf_device_ctx;
 
@@ -175,8 +175,8 @@ static int amf_scale_init(AVFilterContext *avctx)
 {
     AMFScaleContext     *ctx = avctx->priv;
     
-    ctx->allocator.vtbl = &dataAllocatorCBVtbl;
-    ctx->allocator.ctx = ctx;
+//    ctx->allocator.vtbl = &dataAllocatorCBVtbl;
+//    ctx->allocator.ctx = ctx;
 
     if (!strcmp(ctx->format_str, "same")) {
         ctx->format = AV_PIX_FMT_NONE;
@@ -195,7 +195,13 @@ static void amf_scale_uninit(AVFilterContext *avctx)
 {
     AMFScaleContext *ctx = avctx->priv;
 
-//    av_buffer_unref(&ctx->amf_device_ctx);
+    if (ctx->converter) {
+        ctx->converter->pVtbl->Terminate(ctx->converter);
+        ctx->converter->pVtbl->Release(ctx->converter);
+        ctx->converter = NULL;
+    }
+
+    av_buffer_unref(&ctx->amf_device_ctx);
     av_buffer_unref(&ctx->hwdevice_ref);
     av_buffer_unref(&ctx->hwframes_in_ref);
     av_buffer_unref(&ctx->hwframes_out_ref);
@@ -323,14 +329,15 @@ static int amf_scale_config_output(AVFilterLink *outlink)
         pix_fmt_in = inlink->format;
     }
 
-    outlink->w = inlink->w*2;
-    outlink->h = inlink->h*2;
+    outlink->w = inlink->w/2;
+    outlink->h = inlink->h/2;
 
     ctx->hwframes->width     = outlink->w;
     ctx->hwframes->height    = outlink->h;
 
-    //if (avctx->extra_hw_frames >= 0)
-    //    ctx->hwframes->initial_pool_size = 2 + avctx->extra_hw_frames;
+    //ctx->hwframes->initial_pool_size = 16;
+    if (avctx->extra_hw_frames >= 0)
+        ctx->hwframes->initial_pool_size = 2 + avctx->extra_hw_frames;
 
     err = av_hwframe_ctx_init(ctx->hwframes_out_ref);
     if (err < 0)
@@ -351,14 +358,14 @@ static int amf_scale_config_output(AVFilterLink *outlink)
     res = ctx->factory->pVtbl->CreateComponent(ctx->factory, ctx->context, AMFVideoConverter, &ctx->converter);
     AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_ENCODER_NOT_FOUND, "CreateComponent(%ls) failed with error %d\n", AMFVideoConverter, res);
 
-    ctx->converter->pVtbl->SetOutputDataAllocatorCB(ctx->converter, (AMFDataAllocatorCB*)&ctx->allocator);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SetOutputDataAllocatorCB() failed with error %d\n", res);
+//    ctx->converter->pVtbl->SetOutputDataAllocatorCB(ctx->converter, (AMFDataAllocatorCB*)&ctx->allocator);
+//    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SetOutputDataAllocatorCB() failed with error %d\n", res);
 
     AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_FORMAT, (amf_int32)amf_av_to_amf_format(ctx->hwframes->sw_format));
     AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
 
-    AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_MEMORY_TYPE, (amf_int32)AMF_MEMORY_DX11);//FIX ME
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
+    //AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_MEMORY_TYPE, (amf_int32)AMF_MEMORY_DX9);//FIX ME
+    //AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
 
     AMFSize out_sz = { outlink->w, outlink->h };
     AMF_ASSIGN_PROPERTY_SIZE(res, ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_SIZE, out_sz);
@@ -377,6 +384,66 @@ fail:
     //       "Error when evaluating the expression '%s'\n", expr);
     return err;
 }
+
+static void free_texture_dx11(void *opaque, uint8_t *data)
+{
+    ID3D11Texture2D *texture = (ID3D11Texture2D*)(opaque);
+    //texture->lpVtbl->Release(texture);
+}
+
+static void amf_free_amfsurface(void *opaque, uint8_t *data)
+{
+    AMFSurface *surface = (AMFSurface*)(opaque);
+    surface->pVtbl->Release(surface);
+}
+
+static AVFrame *amf_amfsurface_to_avframe(AVFilterContext *avctx, AMFSurface* pSurface)
+{
+    AMFScaleContext *ctx = avctx->priv;
+    AVFrame *frame = av_frame_alloc();
+
+    if (!frame)
+        return NULL;
+
+    switch (pSurface->pVtbl->GetMemoryType(pSurface))
+    {
+#if CONFIG_D3D11VA
+        case AMF_MEMORY_DX11:
+        {
+            AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
+            frame->data[0] = plane0->pVtbl->GetNative(plane0);
+            frame->data[1] = 0;
+
+            frame->buf[0] = av_buffer_create(NULL,
+                                     0,
+                                     free_texture_dx11,
+                                     frame->data[0],
+                                     AV_BUFFER_FLAG_READONLY);
+            frame->buf[0] = av_buffer_create(NULL,
+                                     0,
+                                     amf_free_amfsurface,
+                                     pSurface,
+                                     AV_BUFFER_FLAG_READONLY);
+            pSurface->pVtbl->Acquire(pSurface);
+        }
+        break;
+#endif
+#if CONFIG_DXVA2
+        case AMF_MEMORY_DX9:
+        {
+
+        }
+        break;
+#endif
+    default:
+        {
+            //fail?
+        }
+    }
+
+    return frame;
+}
+
 static int amf_avframe_to_amfsurface(AVFilterContext *avctx, const AVFrame *frame, AMFSurface** ppSurface)
 {
     AMFScaleContext *ctx = avctx->priv;
@@ -450,33 +517,9 @@ static int amf_scale_filter_frame(AVFilterLink *link, AVFrame *in)
     if (!ctx->converter)
         return AVERROR(EINVAL);
 
-    out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
-    if (!out) {
-        ret = AVERROR(ENOMEM);
-        goto fail;
-    }
-
     ret = amf_avframe_to_amfsurface(avctx, in, &surface_in);
     if (ret < 0)
         goto fail;
-    ret = amf_avframe_to_amfsurface(avctx, out, &ctx->allocator.surface);
-    if (ret < 0)
-        goto fail;
-
-//kjhjkjgkjgjhkgjhhjgjkhgjkhgyuf
-
-    ret = av_frame_copy_props(out, in);
-    if (ret < 0)
-        goto fail;
-
-    out->width  = outlink->w;
-    out->height = outlink->h;
-
-    AMF_MEMORY_TYPE mti = surface_in->pVtbl->GetMemoryType(surface_in);
-    AMF_SURFACE_FORMAT sfi = surface_in->pVtbl->GetFormat(surface_in);
-
-    AMF_MEMORY_TYPE mto= ctx->allocator.surface->pVtbl->GetMemoryType(ctx->allocator.surface);
-    AMF_SURFACE_FORMAT sfo = ctx->allocator.surface->pVtbl->GetFormat(ctx->allocator.surface);
 
     res = ctx->converter->pVtbl->SubmitInput(ctx->converter, (AMFData*)surface_in);
     AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SubmitInput() failed with error %d\n", res);
@@ -485,16 +528,25 @@ static int amf_scale_filter_frame(AVFilterLink *link, AVFrame *in)
     AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SubmitInput() failed with error %d\n", res);
 
     if (data_out) {
-        // copy data to packet
         AMFGuid guid = IID_AMFSurface();
         data_out->pVtbl->QueryInterface(data_out, &guid, (void**)&surface_out); // query for buffer interface
+        data_out->pVtbl->Release(data_out);
     }
 
-    AMF_MEMORY_TYPE mtro= surface_out->pVtbl->GetMemoryType(surface_out);
-    AMF_SURFACE_FORMAT sfro = surface_out->pVtbl->GetFormat(surface_out);
+    out = amf_amfsurface_to_avframe(avctx, surface_out);
 
-    ctx->allocator.surface->pVtbl->Release(ctx->allocator.surface);
-    data_out->pVtbl->Release(data_out);
+    ret = av_frame_copy_props(out, in);
+    if (ret < 0)
+        goto fail;
+
+    out->format = outlink->format;
+    out->width  = outlink->w;
+    out->height = outlink->h;
+
+    out->hw_frames_ctx = av_buffer_ref(ctx->hwframes_out_ref);
+    if (!out->hw_frames_ctx)
+        return AVERROR(ENOMEM);
+
     surface_in->pVtbl->Release(surface_in);
     surface_out->pVtbl->Release(surface_out);
 

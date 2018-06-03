@@ -51,6 +51,21 @@
         return ret_value; \
     }
 
+static const AVClass amflib_class = {
+    .class_name = "amf",
+    .item_name = av_default_item_name,
+    .version = LIBAVUTIL_VERSION_INT,
+};
+
+typedef struct AMFLibraryContext {
+    const AVClass      *avclass;
+} AMFLibraryContext;
+
+static AMFLibraryContext amflib_context = 
+{
+    .avclass = &amflib_class,
+};
+
 typedef struct AmfTraceWriter {
     const AMFTraceWriterVtbl    *vtbl;
     void                        *avcl;
@@ -73,6 +88,11 @@ static const AMFTraceWriterVtbl tracer_vtbl =
     .Flush = AMFTraceWriter_Flush,
 };
 
+static const AmfTraceWriter amf_trace_writer = 
+{
+    .vtbl = &tracer_vtbl,
+    .avcl = &amflib_context,
+};
 #define AMFAV_WRITER_ID L"avlog"
 
 typedef struct AMFDeviceContextPrivate {
@@ -92,7 +112,7 @@ static void amf_device_free(AVHWDeviceContext *ctx)
         amf_ctx->context = NULL;
     }
     if(priv->library) {
-        //dlclose(priv->library);
+        dlclose(priv->library);
     }
 }
 
@@ -123,9 +143,7 @@ static int amf_init_device_ctx_object(AVHWDeviceContext *ctx)
     priv->trace->pVtbl->SetGlobalLevel(priv->trace, AMF_TRACE_TRACE);
 
     // connect AMF logger to av_log
-    priv->tracer.vtbl = &tracer_vtbl;
-    priv->tracer.avcl = ctx;
-    priv->trace->pVtbl->RegisterWriter(priv->trace, AMFAV_WRITER_ID, (AMFTraceWriter*)&priv->tracer, 1);
+    priv->trace->pVtbl->RegisterWriter(priv->trace, AMFAV_WRITER_ID, (AMFTraceWriter*)&amf_trace_writer, 1);
     priv->trace->pVtbl->SetWriterLevel(priv->trace, AMFAV_WRITER_ID, AMF_TRACE_TRACE);
 
     res = hwctx->factory->pVtbl->CreateContext(hwctx->factory, &hwctx->context);
