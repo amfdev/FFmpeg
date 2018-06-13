@@ -286,6 +286,7 @@ static void amf_scale_uninit(AVFilterContext *avctx)
 static int amf_scale_query_formats(AVFilterContext *avctx)
 {
     AVBufferRef *device_ref = NULL;
+    AVHWDeviceContext *device_ctx = NULL;
     AVHWFramesConstraints *constraints = NULL;
     const enum AVPixelFormat *output_pix_fmts;
     AVFilterFormats *input_formats = NULL;
@@ -311,12 +312,23 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
         av_log(avctx, AV_LOG_ERROR, "A hardware device reference is required to initialise AMF Scaler.\n");
         return AVERROR(EINVAL);
     }
-    constraints = av_hwdevice_get_hwframe_constraints(device_ref, NULL);
-    if (!constraints) {
-        return AVERROR(EINVAL);
-    }
 
-    output_pix_fmts = constraints->valid_hw_formats;
+    constraints = av_hwdevice_get_hwframe_constraints(device_ref, NULL);
+    if (constraints) {
+        output_pix_fmts = constraints->valid_hw_formats;
+    } else {
+        device_ctx = (AVHWDeviceContext*)device_ref->data;
+        if (device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
+            static const enum AVPixelFormat output_pix_fmts_dxva2[] = {
+                AV_PIX_FMT_DXVA2_VLD,
+                AV_PIX_FMT_NONE,
+            };
+            output_pix_fmts = output_pix_fmts_dxva2;
+        } else {
+            av_log(avctx, AV_LOG_ERROR, "Device is not supported.\n");
+            return AVERROR(EINVAL);
+        }
+    }
 
     input_formats = ff_make_format_list(output_pix_fmts);
     if (!input_formats) {
@@ -562,10 +574,10 @@ static const AVOption options[] = {
     { "fill",       "Enable fill area out of ROI",  OFFSET(fill),           AV_OPT_TYPE_BOOL,  { .i64 = 0 }, 0, 1, FLAGS },
     { "fill_color", "Fill color out of ROI",        OFFSET(fill_color),     AV_OPT_TYPE_COLOR,  {.str = "black"}, CHAR_MIN, CHAR_MAX, FLAGS },
 
-    { "rect_left",  "Output video rect.left",       OFFSET(rect_left),    AV_OPT_TYPE_INT, { .i64 = 0   }, .flags = FLAGS },
-    { "rect_right", "Output video rect.right",      OFFSET(rect_right),   AV_OPT_TYPE_INT, { .i64 = 0   }, .flags = FLAGS },
-    { "rect_top",   "Output video rect.top",        OFFSET(rect_top),     AV_OPT_TYPE_INT, { .i64 = 0   }, .flags = FLAGS },
-    { "rect_bottom","Output video rect.bottom",     OFFSET(rect_bottom),  AV_OPT_TYPE_INT, { .i64 = 0   }, .flags = FLAGS },
+    { "rect_left",  "Output video rect.left",       OFFSET(rect_left),    AV_OPT_TYPE_INT, { .i64 = 0   }, 0, INT_MAX, .flags = FLAGS },
+    { "rect_right", "Output video rect.right",      OFFSET(rect_right),   AV_OPT_TYPE_INT, { .i64 = 0   }, 0, INT_MAX, .flags = FLAGS },
+    { "rect_top",   "Output video rect.top",        OFFSET(rect_top),     AV_OPT_TYPE_INT, { .i64 = 0   }, 0, INT_MAX, .flags = FLAGS },
+    { "rect_bottom","Output video rect.bottom",     OFFSET(rect_bottom),  AV_OPT_TYPE_INT, { .i64 = 0   }, 0, INT_MAX, .flags = FLAGS },
 
     { NULL },
 };
