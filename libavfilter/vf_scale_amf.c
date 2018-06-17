@@ -525,7 +525,6 @@ static int amf_scale_filter_frame(AVFilterLink *link, AVFrame *in)
     res = ctx->converter->pVtbl->SubmitInput(ctx->converter, (AMFData*)surface_in);
     AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SubmitInput() failed with error %d\n", res);
 
-
     res = ctx->converter->pVtbl->QueryOutput(ctx->converter, &data_out);
     AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "QueryOutput() failed with error %d\n", res);
 
