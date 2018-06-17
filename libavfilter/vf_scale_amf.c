@@ -293,10 +293,10 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
     int err;
     int i;
     static const enum AVPixelFormat input_pix_fmts[] = {
-        AV_PIX_FMT_NV12, 
-        AV_PIX_FMT_0RGB, 
-        AV_PIX_FMT_BGR0, 
-        AV_PIX_FMT_RGB0, 
+        AV_PIX_FMT_NV12,
+        AV_PIX_FMT_0RGB,
+        AV_PIX_FMT_BGR0,
+        AV_PIX_FMT_RGB0,
         AV_PIX_FMT_GRAY8,
         AV_PIX_FMT_YUV420P,
         AV_PIX_FMT_YUYV422,
@@ -313,21 +313,36 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
         return AVERROR(EINVAL);
     }
 
-    constraints = av_hwdevice_get_hwframe_constraints(device_ref, NULL);
-    if (constraints) {
-        output_pix_fmts = constraints->valid_hw_formats;
-    } else {
-        device_ctx = (AVHWDeviceContext*)device_ref->data;
-        if (device_ctx->type == AV_HWDEVICE_TYPE_DXVA2) {
+    device_ctx = (AVHWDeviceContext*)device_ref->data;
+
+    switch (device_ctx->type) {
+#if CONFIG_D3D11VA
+        case AV_HWDEVICE_TYPE_D3D11VA:
+        {
+            static const enum AVPixelFormat output_pix_fmts_d3d11[] = {
+                AV_PIX_FMT_D3D11,
+                AV_PIX_FMT_NONE,
+            };
+            output_pix_fmts = output_pix_fmts_d3d11;
+        }
+#endif
+#if CONFIG_DXVA2
+        case AV_HWDEVICE_TYPE_DXVA2:
+        {
             static const enum AVPixelFormat output_pix_fmts_dxva2[] = {
                 AV_PIX_FMT_DXVA2_VLD,
                 AV_PIX_FMT_NONE,
             };
             output_pix_fmts = output_pix_fmts_dxva2;
-        } else {
-            av_log(avctx, AV_LOG_ERROR, "Device is not supported.\n");
+        }
+        break;
+#endif
+        default:
+        {
+            av_log(avctx, AV_LOG_ERROR, "Device %s is not supported by amf.\n", av_hwdevice_get_type_name(device_ctx->type));
             return AVERROR(EINVAL);
         }
+        break;
     }
 
     input_formats = ff_make_format_list(output_pix_fmts);
@@ -510,6 +525,7 @@ static int amf_scale_filter_frame(AVFilterLink *link, AVFrame *in)
     res = ctx->converter->pVtbl->SubmitInput(ctx->converter, (AMFData*)surface_in);
     AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SubmitInput() failed with error %d\n", res);
 
+
     res = ctx->converter->pVtbl->QueryOutput(ctx->converter, &data_out);
     AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "QueryOutput() failed with error %d\n", res);
 
@@ -556,12 +572,12 @@ static const AVOption options[] = {
     { "h",      "Output video height",              OFFSET(h_expr),     AV_OPT_TYPE_STRING, { .str = "ih"   }, .flags = FLAGS },
     { "format", "Output pixel format",              OFFSET(format_str), AV_OPT_TYPE_STRING, { .str = "same" }, .flags = FLAGS },
 
-    { "scale_type",    "Scale Type",                OFFSET(scale_type),      AV_OPT_TYPE_INT,   { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR }, 
+    { "scale_type",    "Scale Type",                OFFSET(scale_type),      AV_OPT_TYPE_INT,   { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR },
         AMF_VIDEO_CONVERTER_SCALE_BILINEAR, AMF_VIDEO_CONVERTER_SCALE_BICUBIC, FLAGS, "scale_type" },
     { "bilinear",      "Bilinear",      0,                       AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR },       0, 0, FLAGS, "scale_type" },
     { "bicubic",       "Bicubic",       0,                       AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_CONVERTER_SCALE_BICUBIC },        0, 0, FLAGS, "scale_type" },
 
-    { "color_profile", "Color Profile",             OFFSET(color_profile),   AV_OPT_TYPE_INT,    { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN }, 
+    { "color_profile", "Color Profile",             OFFSET(color_profile),   AV_OPT_TYPE_INT,    { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN },
         AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN, AMF_VIDEO_CONVERTER_COLOR_PROFILE_JPEG, FLAGS, "color_profile" },
     { "auto",      "Auto",       0, AV_OPT_TYPE_CONST,  { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN },    0, 0, FLAGS, "color_profile" },
     { "601",       "601",        0, AV_OPT_TYPE_CONST,  { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_601  },       0, 0, FLAGS, "color_profile" },
