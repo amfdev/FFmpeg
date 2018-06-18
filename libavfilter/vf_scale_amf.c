@@ -285,9 +285,7 @@ static void amf_scale_uninit(AVFilterContext *avctx)
 
 static int amf_scale_query_formats(AVFilterContext *avctx)
 {
-    AVBufferRef *device_ref = NULL;
     AVHWDeviceContext *device_ctx = NULL;
-    AVHWFramesConstraints *constraints = NULL;
     const enum AVPixelFormat *output_pix_fmts;
     AVFilterFormats *input_formats = NULL;
     int err;
@@ -305,15 +303,13 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
 
     if (avctx->inputs[0]->hw_frames_ctx) {
         AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->inputs[0]->hw_frames_ctx->data;
-        device_ref = frames_ctx->device_ref;
+        device_ctx = (AVHWDeviceContext*)frames_ctx->device_ref->data;
     } else if (avctx->hw_device_ctx) {
-        device_ref = avctx->hw_device_ctx;
+        device_ctx = (AVHWDeviceContext*)avctx->hw_device_ctx->data;
     } else {
         av_log(avctx, AV_LOG_ERROR, "A hardware device reference is required to initialise AMF Scaler.\n");
         return AVERROR(EINVAL);
     }
-
-    device_ctx = (AVHWDeviceContext*)device_ref->data;
 
     switch (device_ctx->type) {
 #if CONFIG_D3D11VA
@@ -325,6 +321,7 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
             };
             output_pix_fmts = output_pix_fmts_d3d11;
         }
+        break;
 #endif
 #if CONFIG_DXVA2
         case AV_HWDEVICE_TYPE_DXVA2:
@@ -362,7 +359,6 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
                               &avctx->outputs[0]->in_formats)) < 0)
         return err;
 
-    av_hwframe_constraints_free(&constraints);
     return 0;
 }
 
