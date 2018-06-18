@@ -300,46 +300,26 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
         AV_PIX_FMT_YUYV422,
         AV_PIX_FMT_NONE,
     };
+    static const enum AVPixelFormat output_pix_fmts_default[] = {
+        AV_PIX_FMT_D3D11,
+        AV_PIX_FMT_DXVA2_VLD,
+        AV_PIX_FMT_NONE,
+    };
+    output_pix_fmts = output_pix_fmts_default;
 
-    if (avctx->inputs[0]->hw_frames_ctx) {
-        AVHWFramesContext *frames_ctx = (AVHWFramesContext*)avctx->inputs[0]->hw_frames_ctx->data;
-        device_ctx = (AVHWDeviceContext*)frames_ctx->device_ref->data;
-    } else if (avctx->hw_device_ctx) {
+    //in case if hw_device_ctx is set to DXVA2 we change order of pixel formats to set DXVA2 be choosen by default
+    //The order is ignored if hw_frames_ctx is not NULL on the config_output stage
+    if (avctx->hw_device_ctx) {
         device_ctx = (AVHWDeviceContext*)avctx->hw_device_ctx->data;
-    } else {
-        av_log(avctx, AV_LOG_ERROR, "A hardware device reference is required to initialise AMF Scaler.\n");
-        return AVERROR(EINVAL);
-    }
 
-    switch (device_ctx->type) {
-#if CONFIG_D3D11VA
-        case AV_HWDEVICE_TYPE_D3D11VA:
-        {
-            static const enum AVPixelFormat output_pix_fmts_d3d11[] = {
-                AV_PIX_FMT_D3D11,
-                AV_PIX_FMT_NONE,
-            };
-            output_pix_fmts = output_pix_fmts_d3d11;
-        }
-        break;
-#endif
-#if CONFIG_DXVA2
-        case AV_HWDEVICE_TYPE_DXVA2:
-        {
+        if (device_ctx->type == AV_HWDEVICE_TYPE_DXVA2){
             static const enum AVPixelFormat output_pix_fmts_dxva2[] = {
                 AV_PIX_FMT_DXVA2_VLD,
+                AV_PIX_FMT_D3D11,
                 AV_PIX_FMT_NONE,
             };
             output_pix_fmts = output_pix_fmts_dxva2;
         }
-        break;
-#endif
-        default:
-        {
-            av_log(avctx, AV_LOG_ERROR, "Device %s is not supported by amf.\n", av_hwdevice_get_type_name(device_ctx->type));
-            return AVERROR(EINVAL);
-        }
-        break;
     }
 
     input_formats = ff_make_format_list(output_pix_fmts);
@@ -432,6 +412,10 @@ static int amf_scale_config_output(AVFilterLink *outlink)
     } else {
         av_log(ctx, AV_LOG_ERROR, "A hardware device reference to init hwcontext_amf.\n");
         return AVERROR(EINVAL);
+    }
+
+    if(ctx->format != AV_PIX_FMT_NONE) {
+        hwframes_out->sw_format = ctx->format;
     }
 
     outlink->w = ctx->width;
