@@ -55,6 +55,13 @@
         return ret_value; \
     }
 
+#define AMFAV_GOTO_FAIL_IF_FALSE(avctx, exp, ret_value, /*message,*/ ...) \
+    if (!(exp)) { \
+        av_log(avctx, AV_LOG_ERROR, __VA_ARGS__); \
+        ret = ret_value; \
+        goto fail; \
+    }
+
 
 typedef struct FormatMap {
     enum AVPixelFormat       av_format;
@@ -63,10 +70,17 @@ typedef struct FormatMap {
 
 static const FormatMap format_map[] =
 {
-    { AV_PIX_FMT_NONE,       AMF_SURFACE_UNKNOWN },
     { AV_PIX_FMT_NV12,       AMF_SURFACE_NV12 },
+
     { AV_PIX_FMT_BGR0,       AMF_SURFACE_BGRA },
+    { AV_PIX_FMT_BGRA,       AMF_SURFACE_BGRA },
+
     { AV_PIX_FMT_RGB0,       AMF_SURFACE_RGBA },
+    { AV_PIX_FMT_RGBA,       AMF_SURFACE_RGBA },
+
+    { AV_PIX_FMT_0RGB,       AMF_SURFACE_ARGB },
+    { AV_PIX_FMT_ARGB,       AMF_SURFACE_ARGB },
+
     { AV_PIX_FMT_GRAY8,      AMF_SURFACE_GRAY8 },
     { AV_PIX_FMT_YUV420P,    AMF_SURFACE_YUV420P },
     { AV_PIX_FMT_YUYV422,    AMF_SURFACE_YUY2 },
@@ -88,22 +102,11 @@ typedef struct AMFScaleContext {
 
     int width, height;
     enum AVPixelFormat format;
+    int scale_type;
 
     char *w_expr;
     char *h_expr;
     char *format_str;
-
-    int rect_left;
-    int rect_right;
-    int rect_top;
-    int rect_bottom;
-    
-    int scale_type;
-    int color_profile;
-    
-    int keep_aspect_ratio;
-    int fill;
-    uint8_t fill_color[4];
 
     AMFComponent        *converter;
     AVBufferRef         *amf_device_ref;
@@ -162,7 +165,7 @@ static AVFrame *amf_amfsurface_to_avframe(AVFilterContext *avctx, AMFSurface* pS
         {
             AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
             frame->data[0] = plane0->pVtbl->GetNative(plane0);
-            frame->data[1] = 0;
+            frame->data[1] = (uint8_t*)(intptr_t)0;
 
             frame->buf[0] = av_buffer_create(NULL,
                                      0,
@@ -285,9 +288,8 @@ static void amf_scale_uninit(AVFilterContext *avctx)
 
 static int amf_scale_query_formats(AVFilterContext *avctx)
 {
-    AVHWDeviceContext *device_ctx = NULL;
     const enum AVPixelFormat *output_pix_fmts;
-    AVFilterFormats *input_formats = NULL;
+    AVFilterFormats *input_formats;
     int err;
     int i;
     static const enum AVPixelFormat input_pix_fmts[] = {
@@ -310,15 +312,38 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
     //in case if hw_device_ctx is set to DXVA2 we change order of pixel formats to set DXVA2 be choosen by default
     //The order is ignored if hw_frames_ctx is not NULL on the config_output stage
     if (avctx->hw_device_ctx) {
-        device_ctx = (AVHWDeviceContext*)avctx->hw_device_ctx->data;
+        AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)avctx->hw_device_ctx->data;
 
-        if (device_ctx->type == AV_HWDEVICE_TYPE_DXVA2){
-            static const enum AVPixelFormat output_pix_fmts_dxva2[] = {
-                AV_PIX_FMT_DXVA2_VLD,
-                AV_PIX_FMT_D3D11,
-                AV_PIX_FMT_NONE,
-            };
-            output_pix_fmts = output_pix_fmts_dxva2;
+
+        switch (device_ctx->type) {
+    #if CONFIG_D3D11VA
+        case AV_HWDEVICE_TYPE_D3D11VA:
+            {
+                static const enum AVPixelFormat output_pix_fmts_d3d11[] = {
+                    AV_PIX_FMT_D3D11,
+                    AV_PIX_FMT_NONE,
+                };
+                output_pix_fmts = output_pix_fmts_d3d11;
+            }
+            break;
+    #endif
+    #if CONFIG_DXVA2
+        case AV_HWDEVICE_TYPE_DXVA2:
+            {
+                static const enum AVPixelFormat output_pix_fmts_dxva2[] = {
+                    AV_PIX_FMT_DXVA2_VLD,
+                    AV_PIX_FMT_NONE,
+                };
+                output_pix_fmts = output_pix_fmts_dxva2;
+            }
+            break;
+    #endif
+        default:
+            {
+                av_log(avctx, AV_LOG_ERROR, "Unsupported device : %s\n", av_hwdevice_get_type_name(device_ctx->type));
+                return AVERROR(EINVAL);
+            }
+            break;
         }
     }
 
@@ -362,6 +387,7 @@ static int amf_scale_config_output(AVFilterLink *outlink)
                                         &ctx->width, &ctx->height)) < 0)
         return err;
 
+    av_buffer_unref(&ctx->amf_device_ref);
     av_buffer_unref(&ctx->hwframes_in_ref);
     av_buffer_unref(&ctx->hwframes_out_ref);
 
@@ -410,7 +436,7 @@ static int amf_scale_config_output(AVFilterLink *outlink)
         pix_fmt_in = inlink->format;
 
     } else {
-        av_log(ctx, AV_LOG_ERROR, "A hardware device reference to init hwcontext_amf.\n");
+        av_log(ctx, AV_LOG_ERROR, "A hardware device reference is required to init hwcontext_amf.\n");
         return AVERROR(EINVAL);
     }
 
@@ -430,8 +456,7 @@ static int amf_scale_config_output(AVFilterLink *outlink)
 
     outlink->hw_frames_ctx = av_buffer_ref(ctx->hwframes_out_ref);
     if (!outlink->hw_frames_ctx) {
-        err = AVERROR(ENOMEM);
-        return err;
+        return AVERROR(ENOMEM);
     }
 
     amf_ctx = ((AVHWDeviceContext*)ctx->amf_device_ref->data)->hwctx;
@@ -439,58 +464,36 @@ static int amf_scale_config_output(AVFilterLink *outlink)
     ctx->factory = amf_ctx->factory;
 
     res = ctx->factory->pVtbl->CreateComponent(ctx->factory, ctx->context, AMFVideoConverter, &ctx->converter);
-    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_ENCODER_NOT_FOUND, "CreateComponent(%ls) failed with error %d\n", AMFVideoConverter, res);
+    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_FILTER_NOT_FOUND, "CreateComponent(%ls) failed with error %d\n", AMFVideoConverter, res);
 
     AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_FORMAT, (amf_int32)amf_av_to_amf_format(hwframes_out->sw_format));
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
+    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR_UNKNOWN, "AMFConverter-SetProperty() failed with error %d\n", res);
 
     out_size.width = outlink->w;
     out_size.height = outlink->h;
     AMF_ASSIGN_PROPERTY_SIZE(res, ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_SIZE, out_size);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
-
-    out_rect.left = ctx->rect_left;
-    out_rect.top = ctx->rect_top;
-    out_rect.right = ctx->rect_right;
-    out_rect.bottom = ctx->rect_bottom;
-    AMF_ASSIGN_PROPERTY_RECT(res, ctx->converter, AMF_VIDEO_CONVERTER_OUTPUT_RECT, out_rect);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
-
-    AMF_ASSIGN_PROPERTY_BOOL(res, ctx->converter, AMF_VIDEO_CONVERTER_KEEP_ASPECT_RATIO, ctx->keep_aspect_ratio);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
-
-    AMF_ASSIGN_PROPERTY_BOOL(res, ctx->converter, AMF_VIDEO_CONVERTER_FILL, ctx->fill);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
-
-    fill_color.r = ctx->fill_color[0];
-    fill_color.g = ctx->fill_color[1];
-    fill_color.b = ctx->fill_color[2];
-    AMF_ASSIGN_PROPERTY_COLOR(res, ctx->converter, AMF_VIDEO_CONVERTER_FILL_COLOR, fill_color);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
+    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR_UNKNOWN, "AMFConverter-SetProperty() failed with error %d\n", res);
 
     AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_SCALE, (amf_int32)ctx->scale_type);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
+    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR_UNKNOWN, "AMFConverter-SetProperty() failed with error %d\n", res);
 
-    if(ctx->color_profile != AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN) {
-        AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_COLOR_PROFILE, (amf_int32)ctx->color_profile);
-        AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-SetProperty() failed with error %d\n", res);
-    }
 
     res = ctx->converter->pVtbl->Init(ctx->converter, amf_av_to_amf_format(pix_fmt_in), inlink->w, inlink->h);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "AMFConverter-Init() failed with error %d\n", res);
+    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR_UNKNOWN, "AMFConverter-Init() failed with error %d\n", res);
 
     return 0;
 }
 
-static int amf_scale_filter_frame(AVFilterLink *link, AVFrame *in)
+static int amf_scale_filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
-    AVFilterContext             *avctx = link->dst;
+    AVFilterContext             *avctx = inlink->dst;
     AMFScaleContext             *ctx = avctx->priv;
     AVFilterLink                *outlink = avctx->outputs[0];
     AMF_RESULT  res;
     AMFSurface *surface_in;
     AMFSurface *surface_out;
     AMFData *data_out;
+    enum AMF_VIDEO_CONVERTER_COLOR_PROFILE_ENUM amf_color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN;
 
     AVFrame *out = NULL;
     int ret = 0;
@@ -503,10 +506,10 @@ static int amf_scale_filter_frame(AVFilterLink *link, AVFrame *in)
         goto fail;
 
     res = ctx->converter->pVtbl->SubmitInput(ctx->converter, (AMFData*)surface_in);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "SubmitInput() failed with error %d\n", res);
+    AMFAV_GOTO_FAIL_IF_FALSE(avctx, res == AMF_OK, AVERROR_UNKNOWN, "SubmitInput() failed with error %d\n", res);
 
     res = ctx->converter->pVtbl->QueryOutput(ctx->converter, &data_out);
-    AMFAV_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR(ENOMEM), "QueryOutput() failed with error %d\n", res);
+    AMFAV_GOTO_FAIL_IF_FALSE(avctx, res == AMF_OK, AVERROR_UNKNOWN, "QueryOutput() failed with error %d\n", res);
 
     if (data_out) {
         AMFGuid guid = IID_AMFSurface();
@@ -520,21 +523,48 @@ static int amf_scale_filter_frame(AVFilterLink *link, AVFrame *in)
     if (ret < 0)
         goto fail;
 
+    switch(in->colorspace) {
+    case AVCOL_SPC_BT470BG:
+    case AVCOL_SPC_SMPTE170M:
+    case AVCOL_SPC_SMPTE240M:
+        amf_color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_601;
+        break;
+    case AVCOL_SPC_BT709:
+        amf_color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_709;
+        break;
+    case AVCOL_SPC_BT2020_NCL:
+    case AVCOL_SPC_BT2020_CL:
+        amf_color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_2020;
+        break;
+    case AVCOL_SPC_RGB:
+        amf_color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_JPEG;
+        break;
+    default:
+        amf_color_profile = AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN;
+        break;
+    }
+
+    if(amf_color_profile != AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN) {
+        AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_COLOR_PROFILE, amf_color_profile);
+    }
+
     out->format = outlink->format;
     out->width  = outlink->w;
     out->height = outlink->h;
 
     out->hw_frames_ctx = av_buffer_ref(ctx->hwframes_out_ref);
-    if (!out->hw_frames_ctx)
-        return AVERROR(ENOMEM);
+    if (!out->hw_frames_ctx) {
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
 
     surface_in->pVtbl->Release(surface_in);
     surface_out->pVtbl->Release(surface_out);
 
-    av_reduce(&out->sample_aspect_ratio.num, &out->sample_aspect_ratio.den,
-              (int64_t)in->sample_aspect_ratio.num * outlink->h * link->w,
-              (int64_t)in->sample_aspect_ratio.den * outlink->w * link->h,
-              INT_MAX);
+    if (inlink->sample_aspect_ratio.num) {
+        outlink->sample_aspect_ratio = av_mul_q((AVRational){outlink->h * inlink->w, outlink->w * inlink->h}, inlink->sample_aspect_ratio);
+    } else
+        outlink->sample_aspect_ratio = inlink->sample_aspect_ratio;
 
     av_frame_free(&in);
     return ff_filter_frame(outlink, out);
@@ -551,28 +581,10 @@ static const AVOption options[] = {
     { "h",      "Output video height",              OFFSET(h_expr),     AV_OPT_TYPE_STRING, { .str = "ih"   }, .flags = FLAGS },
     { "format", "Output pixel format",              OFFSET(format_str), AV_OPT_TYPE_STRING, { .str = "same" }, .flags = FLAGS },
 
-    { "scale_type",    "Scale Type",                OFFSET(scale_type),      AV_OPT_TYPE_INT,   { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR },
+    { "scale_type",    "Scale type",                OFFSET(scale_type),      AV_OPT_TYPE_INT,   { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR },
         AMF_VIDEO_CONVERTER_SCALE_BILINEAR, AMF_VIDEO_CONVERTER_SCALE_BICUBIC, FLAGS, "scale_type" },
     { "bilinear",      "Bilinear",      0,                       AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR },       0, 0, FLAGS, "scale_type" },
     { "bicubic",       "Bicubic",       0,                       AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_CONVERTER_SCALE_BICUBIC },        0, 0, FLAGS, "scale_type" },
-
-    { "color_profile", "Color Profile",             OFFSET(color_profile),   AV_OPT_TYPE_INT,    { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN },
-        AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN, AMF_VIDEO_CONVERTER_COLOR_PROFILE_JPEG, FLAGS, "color_profile" },
-    { "auto",      "Auto",       0, AV_OPT_TYPE_CONST,  { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN },    0, 0, FLAGS, "color_profile" },
-    { "601",       "601",        0, AV_OPT_TYPE_CONST,  { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_601  },       0, 0, FLAGS, "color_profile" },
-    { "709",       "709",        0, AV_OPT_TYPE_CONST,  { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_709  },       0, 0, FLAGS, "color_profile" },
-    { "2020",      "2020",       0, AV_OPT_TYPE_CONST,  { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_2020  },      0, 0, FLAGS, "color_profile" },
-    { "full",      "Full Range", 0, AV_OPT_TYPE_CONST,  { .i64 = AMF_VIDEO_CONVERTER_COLOR_PROFILE_JPEG  },      0, 0, FLAGS, "color_profile" },
-
-    { "keep_aspect_ratio", "Keep Aspect Ratio",     OFFSET(keep_aspect_ratio), AV_OPT_TYPE_BOOL,  { .i64 = 0 }, 0, 1, FLAGS },
-
-    { "fill",       "Enable fill area out of ROI",  OFFSET(fill),           AV_OPT_TYPE_BOOL,  { .i64 = 0 }, 0, 1, FLAGS },
-    { "fill_color", "Fill color out of ROI",        OFFSET(fill_color),     AV_OPT_TYPE_COLOR,  {.str = "black"}, CHAR_MIN, CHAR_MAX, FLAGS },
-
-    { "rect_left",  "Output video rect.left",       OFFSET(rect_left),    AV_OPT_TYPE_INT, { .i64 = 0   }, 0, INT_MAX, .flags = FLAGS },
-    { "rect_right", "Output video rect.right",      OFFSET(rect_right),   AV_OPT_TYPE_INT, { .i64 = 0   }, 0, INT_MAX, .flags = FLAGS },
-    { "rect_top",   "Output video rect.top",        OFFSET(rect_top),     AV_OPT_TYPE_INT, { .i64 = 0   }, 0, INT_MAX, .flags = FLAGS },
-    { "rect_bottom","Output video rect.bottom",     OFFSET(rect_bottom),  AV_OPT_TYPE_INT, { .i64 = 0   }, 0, INT_MAX, .flags = FLAGS },
 
     { NULL },
 };
