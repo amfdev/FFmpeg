@@ -62,7 +62,6 @@
         goto fail; \
     }
 
-
 typedef struct FormatMap {
     enum AVPixelFormat       av_format;
     enum AMF_SURFACE_FORMAT  amf_format;
@@ -314,7 +313,6 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
     if (avctx->hw_device_ctx) {
         AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)avctx->hw_device_ctx->data;
 
-
         switch (device_ctx->type) {
     #if CONFIG_D3D11VA
         case AV_HWDEVICE_TYPE_D3D11VA:
@@ -349,8 +347,7 @@ static int amf_scale_query_formats(AVFilterContext *avctx)
 
     input_formats = ff_make_format_list(output_pix_fmts);
     if (!input_formats) {
-        err = AVERROR(ENOMEM);
-        return err;
+        return AVERROR(ENOMEM);
     }
 
     for (i = 0; input_pix_fmts[i] != AV_PIX_FMT_NONE; i++) {
@@ -376,8 +373,6 @@ static int amf_scale_config_output(AVFilterLink *outlink)
     AVHWFramesContext *hwframes_out;
     enum AVPixelFormat pix_fmt_in;
     AMFSize out_size;
-    AMFRect out_rect;
-    AMFColor fill_color;
     int err;
     AMF_RESULT res;
 
@@ -440,7 +435,7 @@ static int amf_scale_config_output(AVFilterLink *outlink)
         return AVERROR(EINVAL);
     }
 
-    if(ctx->format != AV_PIX_FMT_NONE) {
+    if (ctx->format != AV_PIX_FMT_NONE) {
         hwframes_out->sw_format = ctx->format;
     }
 
@@ -544,7 +539,7 @@ static int amf_scale_filter_frame(AVFilterLink *inlink, AVFrame *in)
         break;
     }
 
-    if(amf_color_profile != AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN) {
+    if (amf_color_profile != AMF_VIDEO_CONVERTER_COLOR_PROFILE_UNKNOWN) {
         AMF_ASSIGN_PROPERTY_INT64(res, ctx->converter, AMF_VIDEO_CONVERTER_COLOR_PROFILE, amf_color_profile);
     }
 
@@ -576,25 +571,21 @@ fail:
 
 #define OFFSET(x) offsetof(AMFScaleContext, x)
 #define FLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM
-static const AVOption options[] = {
+static const AVOption scale_amf_options[] = {
     { "w",      "Output video width",               OFFSET(w_expr),     AV_OPT_TYPE_STRING, { .str = "iw"   }, .flags = FLAGS },
     { "h",      "Output video height",              OFFSET(h_expr),     AV_OPT_TYPE_STRING, { .str = "ih"   }, .flags = FLAGS },
     { "format", "Output pixel format",              OFFSET(format_str), AV_OPT_TYPE_STRING, { .str = "same" }, .flags = FLAGS },
 
     { "scale_type",    "Scale type",                OFFSET(scale_type),      AV_OPT_TYPE_INT,   { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR },
         AMF_VIDEO_CONVERTER_SCALE_BILINEAR, AMF_VIDEO_CONVERTER_SCALE_BICUBIC, FLAGS, "scale_type" },
-    { "bilinear",      "Bilinear",      0,                       AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR },       0, 0, FLAGS, "scale_type" },
-    { "bicubic",       "Bicubic",       0,                       AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_CONVERTER_SCALE_BICUBIC },        0, 0, FLAGS, "scale_type" },
+    { "bilinear",      "Bilinear",      0,                       AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_CONVERTER_SCALE_BILINEAR }, 0, 0, FLAGS, "scale_type" },
+    { "bicubic",       "Bicubic",       0,                       AV_OPT_TYPE_CONST, { .i64 = AMF_VIDEO_CONVERTER_SCALE_BICUBIC },  0, 0, FLAGS, "scale_type" },
 
     { NULL },
 };
 
-static const AVClass amf_scale_class = {
-    .class_name = "amf_scale",
-    .item_name  = av_default_item_name,
-    .option     = options,
-    .version    = LIBAVUTIL_VERSION_INT,
-};
+
+AVFILTER_DEFINE_CLASS(scale_amf);
 
 static const AVFilterPad amf_scale_inputs[] = {
     {
@@ -623,7 +614,7 @@ AVFilter ff_vf_scale_amf = {
     .query_formats = amf_scale_query_formats,
 
     .priv_size = sizeof(AMFScaleContext),
-    .priv_class = &amf_scale_class,
+    .priv_class = &scale_amf_class,
 
     .inputs    = amf_scale_inputs,
     .outputs   = amf_scale_outputs,
