@@ -21,7 +21,6 @@
 #include "libavutil/avassert.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/hwcontext.h"
-
 #include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/time.h"
@@ -36,8 +35,6 @@
 #if CONFIG_D3D11VA
 #include <d3d11.h>
 #endif
-
-#define FFMPEG_AMF_WRITER_ID L"ffmpeg_amf"
 
 #define PTS_PROP L"PtsProp"
 
@@ -127,10 +124,6 @@ static int amf_init_context(AVCodecContext *avctx)
         ret = av_hwdevice_ctx_create_derived(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, avctx->hw_device_ctx, 0);
         if (ret < 0)
             return ret;
-
-        ctx->hw_device_ctx = av_buffer_ref(avctx->hw_device_ctx);
-        if (!ctx->hw_device_ctx)
-            return AVERROR(ENOMEM);
 
     } else {
         ret = av_hwdevice_ctx_create(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, NULL, NULL, 0);
