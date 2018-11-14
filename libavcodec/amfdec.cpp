@@ -96,3 +96,149 @@ int ff_amf_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 {
 
 }
+
+AMF_RESULT BufferFromPacket(const AVPacket* pPacket, AMFBuffer** ppBuffer)
+{
+    AMF_RETURN_IF_FALSE(pPacket != NULL, AMF_INVALID_ARG, L"BufferFromPacket() - packet not passed in");
+    AMF_RETURN_IF_FALSE(ppBuffer != NULL, AMF_INVALID_ARG, L"BufferFromPacket() - buffer pointer not passed in");
+
+
+    // Reproduce FFMPEG packet allocate logic (file libavcodec/avpacket.c function av_packet_duplicate)
+    // ...
+    //    data = av_malloc(pkt->size + FF_INPUT_BUFFER_PADDING_SIZE);
+    // ...
+    //MM this causes problems because there is no way to set real buffer size. Allocation has 32 byte alignment - should be enough.
+    AMF_RESULT err = m_pContext->AllocBuffer(AMF_MEMORY_HOST, pPacket->size + FF_INPUT_BUFFER_PADDING_SIZE, ppBuffer);
+    AMF_RETURN_IF_FAILED(err, L"BufferFromPacket() - AllocBuffer failed");
+
+    AMFBuffer* pBuffer = *ppBuffer;
+    err = pBuffer->SetSize(pPacket->size);
+    AMF_RETURN_IF_FAILED(err, L"BufferFromPacket() - SetSize failed");
+
+    // get the memory location and check the buffer was indeed allocated
+    void* pMem = pBuffer->GetNative();
+    AMF_RETURN_IF_FALSE(pMem != NULL, AMF_INVALID_POINTER, L"BufferFromPacket() - GetMemory failed");
+
+    // copy the packet memory and don't forget to
+    // clear data padding like it is done by FFMPEG
+    memcpy(pMem, pPacket->data, pPacket->size);
+    memset(reinterpret_cast<amf_int8*>(pMem)+pPacket->size, 0, FF_INPUT_BUFFER_PADDING_SIZE);
+
+    // now that we created the buffer, it's time to update
+    // it's properties from the packet information...
+    return UpdateBufferProperties(pBuffer, pPacket);
+}
+
+AMF_RESULT UpdateBufferProperties(AMFBuffer* pBuffer, const AVPacket* pPacket)
+{
+    AMF_RETURN_IF_FALSE(pBuffer != NULL, AMF_INVALID_ARG, L"UpdateBufferProperties() - buffer not passed in");
+    AMF_RETURN_IF_FALSE(pPacket != NULL, AMF_INVALID_ARG, L"UpdateBufferProperties() - packet not passed in");
+
+    const AVStream*  ist = m_pInputContext->streams[pPacket->stream_index];
+    AMF_RETURN_IF_FALSE(ist != NULL, AMF_UNEXPECTED, L"UpdateBufferProperties() - stream not available");
+
+    const amf_int64  pts = av_rescale_q(pPacket->dts, ist->time_base, AMF_TIME_BASE_Q);
+    pBuffer->SetPts(pts - GetMinPosition());
+
+    if (pPacket != NULL)
+    {
+        pBuffer->SetProperty(L"FFMPEG:pts", AMFVariant(pPacket->pts));
+        pBuffer->SetProperty(L"FFMPEG:dts", AMFVariant(pPacket->dts));
+        pBuffer->SetProperty(L"FFMPEG:stream_index", AMFVariant(pPacket->stream_index));
+        pBuffer->SetProperty(L"FFMPEG:flags", AMFVariant(pPacket->flags));
+        pBuffer->SetProperty(L"FFMPEG:duration", AMFVariant(pPacket->duration));
+        pBuffer->SetProperty(L"FFMPEG:pos", AMFVariant(pPacket->pos));
+        pBuffer->SetProperty(L"FFMPEG:convergence_duration", AMFVariant(pPacket->convergence_duration));
+    }
+
+    pBuffer->SetProperty(L"FFMPEG:FirstPtsOffset", AMFVariant(m_ptsInitialMinPosition));
+
+    if (ist->start_time != AV_NOPTS_VALUE)
+    {
+        pBuffer->SetProperty(L"FFMPEG:start_time", AMFVariant(ist->start_time));
+    }
+    pBuffer->SetProperty(L"FFMPEG:time_base_den", AMFVariant(ist->time_base.den));
+    pBuffer->SetProperty(L"FFMPEG:time_base_num", AMFVariant(ist->time_base.num));
+
+
+    if ((m_iVideoStreamIndex == -1 || pPacket->stream_index == m_iVideoStreamIndex) && m_ptsSeekPos != -1)
+    {
+        if (pts < m_ptsSeekPos)
+        {
+            pBuffer->SetProperty(L"Seeking", AMFVariant(true));
+        }
+
+        if (m_ptsSeekPos <= m_ptsPosition)
+        {
+            pBuffer->SetProperty(L"EndSeeking", AMFVariant(true));
+
+            int default_stream_index = av_find_default_stream_index(m_pInputContext);
+            if (pPacket->stream_index == default_stream_index)
+            {
+                m_ptsSeekPos = -1;
+            }
+            // set end
+        }
+        else
+        {
+            if (pPacket->flags & AV_PKT_FLAG_KEY)
+            {
+                pBuffer->SetProperty(L"BeginSeeking", AMFVariant(true));
+            }
+        }
+    }
+
+    // update buffer duration, based on the type if info stored
+    if (ist->codec->codec_type == AVMEDIA_TYPE_VIDEO)
+    {
+        pBuffer->SetProperty(FFMPEG_DEMUXER_BUFFER_TYPE, AMFVariant(AMF_STREAM_VIDEO));
+        UpdateBufferVideoDuration(pBuffer, pPacket, ist);
+//        AMFTraceWarning(AMF_FACILITY, L"Video PTS=%5.2f", (double)pBuffer->GetPts() / 10000);
+
+    }
+    else if (ist->codec->codec_type == AVMEDIA_TYPE_AUDIO)
+    {
+        pBuffer->SetProperty(FFMPEG_DEMUXER_BUFFER_TYPE, AMFVariant(AMF_STREAM_AUDIO));
+        UpdateBufferAudioDuration(pBuffer, pPacket, ist);
+//        AMFTraceWarning(AMF_FACILITY, L"Audio PTS=%5.2f", (double)pBuffer->GetPts() / 10000);
+    }
+    pBuffer->SetProperty(FFMPEG_DEMUXER_BUFFER_STREAM_INDEX, pPacket->stream_index);
+
+
+    return AMF_OK;
+}
+
+int ff_amf_send_packet(AVCodecContext *avctx, const AVPacket *avpkt)
+{
+    AVAMFDecoderContext *ctx = avctx->priv_data;
+
+    AMFBufferPtr buf;
+    AMF_RESULT err = BufferFromPacket(avpkt, &buf);
+    AMF_RETURN_IF_FALSE(err == AMF_OK, err, L"Cannot convert AVPacket to AMFbuffer");
+
+    amf_int32 frameCount = -1;
+    amf_int32 submitted = 0;
+
+    while(submitted < frameCount || frameCount < 0)
+    {
+        amf_pts start_time = amf_high_precision_clock();
+        buf->SetProperty(START_TIME_PROPERTY, start_time);
+
+        res = ctx->decoder->SubmitInput(buf);
+        if(res == AMF_NEED_MORE_INPUT)
+        {
+            break;
+            // do nothing
+        }
+        else if(res == AMF_INPUT_FULL || res == AMF_DECODER_NO_FREE_SURFACES)
+        { // queue is full; sleep, try to get ready surfaces  in polling thread and repeat submission
+            amf_sleep(1);
+        }
+        else
+        { // submission succeeded. read new buffer from parser
+            submitted++;
+        }
+    }
+    // drain decoder queue
+    res = ctx->decoder->Drain();
+}

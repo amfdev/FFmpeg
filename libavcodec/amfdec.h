@@ -4,7 +4,8 @@
 #include "internal.h"
 
 #include "../libavutil/frame.h"//change path
-
+#include <AMF/core/Buffer.h>
+#include <AMF/components/Component.h>
 #include "avcodec.h"
 
 
@@ -54,8 +55,19 @@ int ff_amf_decode_close(AVCodecContext *avctx);
 * Ecoding one frame - common function for all AMF encoders
 */
 
+#ifndef AMF_RETURN_IF_FALSE
+/**
+* Error handling helper
+*/
+#define AMF_RETURN_IF_FALSE(avctx, exp, ret_value, /*message,*/ ...) \
+    if (!(exp)) { \
+        av_log(avctx, AV_LOG_ERROR, __VA_ARGS__); \
+        return ret_value; \
+    }
+#endif
+
 static int ff_amf_receive_frame(AVCodecContext *avctx, AVFrame *frame);
-static int ff_amf_send_packet(AVCodecContext *avctx, AVFrame *frame);
+static int ff_amf_send_packet(AVCodecContext *avctx, const AVPacket *avpkt);
 
 
 #endif // AVCODEC_AMFDEC_H
