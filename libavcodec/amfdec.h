@@ -6,6 +6,7 @@
 #include "../libavutil/frame.h"//change path
 #include <AMF/core/Buffer.h>
 #include <AMF/components/Component.h>
+#include <AMF/core/Surface.h>
 #include "avcodec.h"
 
 

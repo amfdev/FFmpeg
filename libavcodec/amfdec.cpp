@@ -92,10 +92,91 @@ int ff_amf_decode_close(AVCodecContext *avctx)
     return 0;
 }
 
+static AVFrame *amf_amfsurface_to_avframe(AVFilterContext *avctx, AMFSurface* pSurface)
+{
+    AVFrame *frame = av_frame_alloc();
+
+    if (!frame)
+        return NULL;
+
+    switch (pSurface->pVtbl->GetMemoryType(pSurface))
+    {
+#if CONFIG_D3D11VA
+        case AMF_MEMORY_DX11:
+        {
+            AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
+            frame->data[0] = plane0->pVtbl->GetNative(plane0);
+            frame->data[1] = (uint8_t*)(intptr_t)0;
+
+            frame->buf[0] = av_buffer_create(NULL,
+                                     0,
+                                     amf_free_amfsurface,
+                                     pSurface,
+                                     AV_BUFFER_FLAG_READONLY);
+            pSurface->pVtbl->Acquire(pSurface);
+        }
+        break;
+#endif
+#if CONFIG_DXVA2
+        case AMF_MEMORY_DX9:
+        {
+            AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
+            frame->data[3] = plane0->pVtbl->GetNative(plane0);
+
+            frame->buf[0] = av_buffer_create(NULL,
+                                     0,
+                                     amf_free_amfsurface,
+                                     pSurface,
+                                     AV_BUFFER_FLAG_READONLY);
+            pSurface->pVtbl->Acquire(pSurface);
+        }
+        break;
+#endif
+    default:
+        {
+            av_assert0(0);//should not happen
+            //res = ctx->context->pVtbl->AllocSurface(ctx->context, AMF_MEMORY_HOST, ctx->format, avctx->width, avctx->height, &surface);
+            //AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "AllocSurface() failed  with error %d\n", res);
+            //amf_copy_surface(avctx, frame, surface);
+        }
+    }
+
+    return frame;
+}
+
 int ff_amf_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 {
+    AVAMFDecoderContext *ctx = avctx->priv_data;
+    AMF_RESULT  res;
+    AMFSurface *surface;
+    AMFData *data_out;
 
+    res = ctx->decoder->pVtbl->QueryOutput(ctx->decoder, &data_out);
+    AMFAV_GOTO_FAIL_IF_FALSE(avctx, res == AMF_OK, AVERROR_UNKNOWN, "QueryOutput() failed with error %d\n", res);
+
+    if (data_out)
+    {
+        AMFGuid guid = IID_AMFSurface();
+        data_out->pVtbl->QueryInterface(data_out, &guid, (void**)&surface_out); // query for buffer interface
+        data_out->pVtbl->Release(data_out);
+    }
+    frame = amf_amfsurface_to_avframe(avctx, surface);
+    // copy props
+    frame->format = outlink->format;
+    frame->width  = outlink->w;
+    frame->height = outlink->h;
+
+    frame->hw_frames_ctx = av_buffer_ref(ctx->hwframes_out_ref);
+    if (!frame->hw_frames_ctx)
+    {
+        res = AVERROR(ENOMEM);
+        goto fail;
+    }
+fail:
+    av_frame_free(&frame);
+    return res;
 }
+
 
 AMF_RESULT BufferFromPacket(const AVPacket* pPacket, AMFBuffer** ppBuffer)
 {
@@ -228,14 +309,13 @@ int ff_amf_send_packet(AVCodecContext *avctx, const AVPacket *avpkt)
         if(res == AMF_NEED_MORE_INPUT)
         {
             break;
-            // do nothing
         }
         else if(res == AMF_INPUT_FULL || res == AMF_DECODER_NO_FREE_SURFACES)
-        { // queue is full; sleep, try to get ready surfaces  in polling thread and repeat submission
+        { // queue is full; sleep, try to get ready surfaces and repeat submission
             amf_sleep(1);
         }
         else
-        { // submission succeeded. read new buffer from parser
+        {
             submitted++;
         }
     }
