@@ -67,8 +67,14 @@ int ff_amf_decode_close(AVCodecContext *avctx);
     }
 #endif
 
-static int ff_amf_receive_frame(AVCodecContext *avctx, AVFrame *frame);
-static int ff_amf_send_packet(AVCodecContext *avctx, const AVPacket *avpkt);
+#define AMFAV_GOTO_FAIL_IF_FALSE(avctx, exp, ret_value, /*message,*/ ...) \
+    if (!(exp)) { \
+        av_log(avctx, AV_LOG_ERROR, __VA_ARGS__); \
+        ret = ret_value; \
+        goto fail; \
+    }
+
+static int ff_amf_send_packet(AVCodecContext *avctx, void *data, int *got_frame, AVPacket *avpkt);
 
 
 #endif // AVCODEC_AMFDEC_H

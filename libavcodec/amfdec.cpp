@@ -277,48 +277,76 @@ AMF_RESULT UpdateBufferProperties(AMFBuffer* pBuffer, const AVPacket* pPacket)
 //        AMFTraceWarning(AMF_FACILITY, L"Video PTS=%5.2f", (double)pBuffer->GetPts() / 10000);
 
     }
-    else if (ist->codec->codec_type == AVMEDIA_TYPE_AUDIO)
-    {
-        pBuffer->SetProperty(FFMPEG_DEMUXER_BUFFER_TYPE, AMFVariant(AMF_STREAM_AUDIO));
-        UpdateBufferAudioDuration(pBuffer, pPacket, ist);
-//        AMFTraceWarning(AMF_FACILITY, L"Audio PTS=%5.2f", (double)pBuffer->GetPts() / 10000);
-    }
+//    else if (ist->codec->codec_type == AVMEDIA_TYPE_AUDIO)
+//    {
+//        pBuffer->SetProperty(FFMPEG_DEMUXER_BUFFER_TYPE, AMFVariant(AMF_STREAM_AUDIO));
+//        UpdateBufferAudioDuration(pBuffer, pPacket, ist);
+////        AMFTraceWarning(AMF_FACILITY, L"Audio PTS=%5.2f", (double)pBuffer->GetPts() / 10000);
+//    }
     pBuffer->SetProperty(FFMPEG_DEMUXER_BUFFER_STREAM_INDEX, pPacket->stream_index);
 
 
     return AMF_OK;
 }
 
-int ff_amf_send_packet(AVCodecContext *avctx, const AVPacket *avpkt)
+int amf_decode_frame(AVCodecContext *avctx, void *data,
+                       int *got_frame, AVPacket *avpkt)
 {
     AVAMFDecoderContext *ctx = avctx->priv_data;
 
     AMFBufferPtr buf;
     AMF_RESULT err = BufferFromPacket(avpkt, &buf);
     AMF_RETURN_IF_FALSE(err == AMF_OK, err, L"Cannot convert AVPacket to AMFbuffer");
+    AVFrame *frame    = data;
 
-    amf_int32 frameCount = -1;
-    amf_int32 submitted = 0;
-
-    while(submitted < frameCount || frameCount < 0)
+    while(!*got_frame)
     {
-        amf_pts start_time = amf_high_precision_clock();
-        buf->SetProperty(START_TIME_PROPERTY, start_time);
+        //amf_pts start_time = amf_high_precision_clock();
+        //buf->SetProperty(START_TIME_PROPERTY, start_time);
 
         res = ctx->decoder->SubmitInput(buf);
         if(res == AMF_NEED_MORE_INPUT)
         {
-            break;
+            continue;
         }
         else if(res == AMF_INPUT_FULL || res == AMF_DECODER_NO_FREE_SURFACES)
         { // queue is full; sleep, try to get ready surfaces and repeat submission
             amf_sleep(1);
         }
-        else
+        else//res == AMF_OK
         {
-            submitted++;
+            res = ff_amf_receive_frame(avctx, frame);
+            if (res == AMF_EOF || data == NULL)
+            {
+                break;// end of file
+            }
+            else if (res == AMF_NEED_MORE_INPUT)
+            {
+
+            }
         }
     }
-    // drain decoder queue
-    res = ctx->decoder->Drain();
+    //if empty packet
+    //res = ctx->decoder->Drain();
+    return res;
 }
+
+static void amf_decode_flush(AVCodecContext *avctx)
+{
+
+}
+
+AVCodec ff_amf_decoder = {
+    .name           = "amf",
+    .long_name      = NULL_IF_CONFIG_SMALL("AMD AMF decoder"),
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_HEVC,
+    .init           = ff_amf_decode_init,
+    .decode         = amf_decode_frame,
+    .flush          = amf_decode_flush,
+    .close          = ff_amf_decode_close,
+    .bsfs           = "bsf_name", //TODO: real vcalue
+    .capabilities   = AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_DELAY | //TODO: real vcalue
+                      AV_CODEC_CAP_AVOID_PROBING,
+    .wrapper_name   = "amf",
+};
