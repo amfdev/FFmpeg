@@ -1,14 +1,17 @@
 #ifndef AVCODEC_AMFDEC_H
 #define AVCODEC_AMFDEC_H
-#include "avcodec.h"
-#include "internal.h"
+//#include "internal.h"
 
-#include "../libavutil/frame.h"//change path
+#include "libavutil/frame.h"
+#include "libavutil/fifo.h"
+//#include "libavutil/hwcontext_amf.h"
 #include <AMF/core/Buffer.h>
 #include <AMF/components/Component.h>
+#include <AMF/core/Factory.h>
 #include <AMF/core/Surface.h>
+#include <AMF/core/Context.h>
 #include "avcodec.h"
-
+#include <AMF/components/VideoDecoderUVD.h>
 
 /**
 * AMF encoder context
@@ -74,7 +77,7 @@ int ff_amf_decode_close(AVCodecContext *avctx);
         goto fail; \
     }
 
-static int ff_amf_send_packet(AVCodecContext *avctx, void *data, int *got_frame, AVPacket *avpkt);
+static int amf_decode_frame(AVCodecContext *avctx, void *data, int *got_frame, AVPacket *avpkt);
 
 
 #endif // AVCODEC_AMFDEC_H
