@@ -36,18 +36,18 @@ static int amf_init_decoder(AVCodecContext *avctx)
 
 static int amf_init_decoder_context(AVCodecContext *avctx)
 {
-//    AVAMFDecoderContext *ctx = avctx->priv_data;
-//    AVAMFDeviceContext *amf_ctx;
-//    int ret;
+    AVAMFDecoderContext *ctx = avctx->priv_data;
+    AVAMFDeviceContext *amf_ctx;
+    int ret;
 
-//    ret = av_hwdevice_ctx_create(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, NULL, NULL, 0);
-//    if (ret < 0)
-//        return ret;
+    ret = av_hwdevice_ctx_create(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, NULL, NULL, 0);
+    if (ret < 0)
+        return ret;
 
-//    amf_ctx = ((AVHWDeviceContext*)ctx->amf_device_ctx->data)->hwctx;
-//    ctx->context = amf_ctx->context;
-//    ctx->factory = amf_ctx->factory;
-//    return ret;
+    amf_ctx = ((AVHWDeviceContext*)ctx->amf_device_ctx->data)->hwctx;
+    ctx->context = amf_ctx->context;
+    ctx->factory = amf_ctx->factory;
+    return ret;
     return 0;
 }
 
@@ -371,12 +371,31 @@ static void amf_decode_flush(AVCodecContext *avctx)
 
 }
 
+#define OFFSET(x) offsetof(AVAMFDecoderContext, x)
+#define VD AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
+
+static const AVOption options[] = {
+    //Decoder mode
+    { "decoder_mode",          "Decoder mode",        OFFSET(decoder_mode),  AV_OPT_TYPE_INT,   { .i64 = AMF_VIDEO_DECODER_MODE_REGULAR      }, AMF_VIDEO_DECODER_MODE_REGULAR, AMF_VIDEO_DECODER_MODE_LOW_LATENCY, VD, "decoder_mode" },
+    { "timestamp_mode",          "Timestamp mode",        OFFSET(timestamp_mode),  AV_OPT_TYPE_INT,   { .i64 = AMF_TS_PRESENTATION      }, AMF_TS_PRESENTATION, AMF_TS_DECODE, VD, "timestamp_mode" },
+    { NULL }
+};
+
+static const AVClass amf_decode_class = {
+    .class_name = "amf",
+    .item_name  = av_default_item_name,
+    .option     = options,
+    .version    = LIBAVUTIL_VERSION_INT,
+};
+
 AVCodec ff_amf_decoder = {
     .name           = "amf",
 //    .long_name      = NULL_IF_CONFIG_SMALL("AMD AMF decoder"),
     .long_name      = "AMD AMF decoder",
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_HEVC,
+    .priv_data_size = sizeof(AVAMFDecoderContext),
+    .priv_class     = &amf_decode_class,
     .init           = ff_amf_decode_init,
     .decode         = amf_decode_frame,
     .flush          = amf_decode_flush,

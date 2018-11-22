@@ -4,7 +4,8 @@
 
 #include "libavutil/frame.h"
 #include "libavutil/fifo.h"
-//#include "libavutil/hwcontext_amf.h"
+#include "libavutil/hwcontext_amf.h"
+#include "libavutil/opt.h"
 #include <AMF/core/Buffer.h>
 #include <AMF/components/Component.h>
 #include <AMF/core/Factory.h>
@@ -43,6 +44,9 @@ typedef struct AVAMFDecoderContext {
     // common encoder option options
 
     int                 log_to_dbg;
+    // Static options, have to be set before Init() call
+    int                 decoder_mode;
+    int                 timestamp_mode;
 
 } AVAMFDecoderContext;
 
