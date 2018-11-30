@@ -6,6 +6,7 @@
 #include "libavutil/fifo.h"
 #include "libavutil/hwcontext_amf.h"
 #include "libavutil/opt.h"
+#include "libavformat/avformat.h"
 #include <AMF/core/Buffer.h>
 #include <AMF/components/Component.h>
 #include <AMF/core/Factory.h>
@@ -80,6 +81,8 @@ int ff_amf_decode_close(AVCodecContext *avctx);
         ret = ret_value; \
         goto fail; \
     }
+
+#define AMF_TIME_BASE_Q          (AVRational){1, AMF_SECOND}
 
 static int amf_decode_frame(AVCodecContext *avctx, void *data, int *got_frame, AVPacket *avpkt);
 
