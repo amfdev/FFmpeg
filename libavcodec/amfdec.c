@@ -354,19 +354,20 @@ int amf_decode_frame(AVCodecContext *avctx, void *data,
     AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, 0, "Cannot convert AVPacket to AMFbuffer");
     AVFrame *frame    = data;
 
-    while(!*got_frame)
+    while(1)
     {
         res = ctx->decoder->pVtbl->SubmitInput(ctx->decoder, buf);
         if (res == AMF_OK)
         {
-            *got_frame = 1;
             break;
         }
         else if (res == res == AMF_INPUT_FULL)
         {
             res = ff_amf_receive_frame(avctx, frame);
-            if (res != AMF_OK)
+            if (res == AMF_OK)
             {
+                AMF_RETURN_IF_FALSE(avctx, !*got_frame, avpkt->size, "frame already got");
+                *got_frame = 1;
                 //amf_sleep(1);
             }
         }
