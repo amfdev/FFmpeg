@@ -150,16 +150,16 @@ static int amf_copy_surface(AVCodecContext *avctx, AVFrame *frame,
     AMFPlane *plane;
     int       i;
 
-    for (i = 0; i < FF_ARRAY_ELEMS(frame->data) && frame->data[i]; i++)
+    for (i = 0; i < surface->pVtbl->GetPlanesCount(surface); i++)
     {
         plane = surface->pVtbl->GetPlaneAt(surface, i);
         frame->data[i] = plane->pVtbl->GetNative(plane);
-        frame->buf[0] = av_buffer_create(NULL,
-                                             0,
-                                             amf_free_amfsurface,
-                                             surface,
-                                             AV_BUFFER_FLAG_READONLY);
     }
+    frame->buf[0] = av_buffer_create(NULL,
+                                         0,
+                                         amf_free_amfsurface,
+                                         surface,
+                                         AV_BUFFER_FLAG_READONLY);
     return 0;
 }
 
@@ -354,6 +354,15 @@ int amf_decode_frame(AVCodecContext *avctx, void *data,
     AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, 0, "Cannot convert AVPacket to AMFbuffer");
     AVFrame *frame    = data;
 
+    if (!avpkt->size)
+    {
+        res = ff_amf_receive_frame(avctx, frame);
+        if (res == AMF_OK)
+        {
+            *got_frame = 1;
+        }
+        return 0;
+    }
     while(1)
     {
         res = ctx->decoder->pVtbl->SubmitInput(ctx->decoder, buf);
@@ -361,7 +370,7 @@ int amf_decode_frame(AVCodecContext *avctx, void *data,
         {
             break;
         }
-        else if (res == res == AMF_INPUT_FULL)
+        else if (res == AMF_INPUT_FULL || res == AMF_DECODER_NO_FREE_SURFACES)
         {
             res = ff_amf_receive_frame(avctx, frame);
             if (res == AMF_OK)
@@ -420,7 +429,7 @@ AVCodec ff_amf_decoder = {
 //    .long_name      = NULL_IF_CONFIG_SMALL("AMD AMF decoder"),
     .long_name      = "AMD AMF decoder",
     .type           = AVMEDIA_TYPE_VIDEO,
-    .id             = AV_CODEC_ID_HEVC,
+    .id             = AV_CODEC_ID_H264,
     .priv_data_size = sizeof(AVAMFDecoderContext),
     .priv_class     = &amf_decode_class,
     .init           = ff_amf_decode_init,
