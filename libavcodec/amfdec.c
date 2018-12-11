@@ -185,8 +185,8 @@ static int ff_amf_receive_frame(const AVCodecContext *avctx, AVFrame *frame)
 {
     AVAMFDecoderContext *ctx = avctx->priv_data;
     AMF_RESULT  ret;
-    AMFSurface *surface;
-    AVFrame *data;
+    AMFSurface *surface = NULL;
+    AVFrame *data = NULL;
     AMFData *data_out = NULL;
 
     if (!ctx->decoder)
@@ -216,8 +216,12 @@ static int ff_amf_receive_frame(const AVCodecContext *avctx, AVFrame *frame)
 
     return ret;
 fail:
-    av_frame_free(&data);
-    surface->pVtbl->Release(surface);
+    if (data) {
+        av_frame_free(&data);
+    }
+    if (surface){
+        surface->pVtbl->Release(surface);
+    }
     return ret;
 }
 
