@@ -33,11 +33,6 @@ typedef struct AVAMFDecoderContext {
     AVBufferRef        *hw_device_ctx; ///< pointer to HW accelerator (decoder)
     AVBufferRef        *hw_frames_ctx; ///< pointer to HW accelerator (frame allocator)
 
-    // helpers to handle async calls
-    int                 delayed_drain;
-    AMFSurface         *delayed_surface;
-    AVFrame            *delayed_frame;
-
     // shift dts back by max_b_frames in timing
     AVFifoBuffer       *timestamp_list;
     int64_t             dts_delay;

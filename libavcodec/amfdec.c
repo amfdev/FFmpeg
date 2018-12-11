@@ -3,6 +3,7 @@
 #include <AMF/core/PropertyStorage.h>
 #include <AMF/components/FFMPEGFileDemuxer.h>
 #include "libavutil/imgutils.h"
+//#include "../libavutil/Frame.h"
 
 
 #define propNotFound 0
@@ -40,6 +41,18 @@ static enum AMF_SURFACE_FORMAT amf_av_to_amf_format(enum AVPixelFormat fmt)
     }
     return AMF_SURFACE_UNKNOWN;
 }
+
+static enum AVPixelFormat amf_amf_to_av_format(enum AMF_SURFACE_FORMAT fmt)
+{
+    int i;
+    for (i = 0; i < amf_countof(format_map); i++) {
+        if (format_map[i].amf_format == fmt) {
+            return format_map[i].av_format;
+        }
+    }
+    return AMF_SURFACE_UNKNOWN;
+}
+
 
 static void amf_free_amfsurface(void *opaque, uint8_t *data)
 {
@@ -119,11 +132,6 @@ int ff_amf_decode_close(AVCodecContext *avctx)
 {
     AVAMFDecoderContext *ctx = avctx->priv_data;
 
-    if (ctx->delayed_surface) {
-        ctx->delayed_surface->pVtbl->Release(ctx->delayed_surface);
-        ctx->delayed_surface = NULL;
-    }
-
     if (ctx->decoder) {
         ctx->decoder->pVtbl->Terminate(ctx->decoder);
         ctx->decoder->pVtbl->Release(ctx->decoder);
@@ -135,8 +143,6 @@ int ff_amf_decode_close(AVCodecContext *avctx)
 
     ctx->factory = NULL;
     ctx->context = NULL;
-    ctx->delayed_drain = 0;
-    av_frame_free(&ctx->delayed_frame);
     av_fifo_freep(&ctx->timestamp_list);
 
     av_buffer_unref(&ctx->amf_device_ctx);
@@ -163,6 +169,35 @@ static int amf_copy_surface(AVCodecContext *avctx, AVFrame *frame,
     return 0;
 }
 
+//static int amf_copy_surface(AVCodecContext *avctx, const AVFrame *frame,
+//    AMFSurface* surface)
+//{
+//    AMFPlane *plane;
+//    uint8_t  *dst_data[4];
+//    int       dst_linesize[4];
+//    int       planes;
+//    int       i;
+
+//    planes = surface->pVtbl->GetPlanesCount(surface);
+//    //av_assert0(planes < FF_ARRAY_ELEMS(dst_data));
+
+//    for (i = 0; i < planes; i++) {
+//        plane = surface->pVtbl->GetPlaneAt(surface, i);
+//        dst_data[i] = plane->pVtbl->GetNative(plane);
+//        dst_linesize[i] = plane->pVtbl->GetHPitch(plane);
+//    }
+//    av_image_copy(dst_data, dst_linesize,
+//        (const uint8_t**)frame->data, frame->linesize, frame->format,
+//        frame->width, frame->height);
+
+//    frame->buf[0] = av_buffer_create(NULL,
+//                                         0,
+//                                         amf_free_amfsurface,
+//                                         surface,
+//                                         AV_BUFFER_FLAG_READONLY);
+//    return 0;
+//}
+
 static AVFrame *amf_amfsurface_to_avframe(AVCodecContext *avctx, AMFSurface* pSurface)
 {
     AVFrame *frame = av_frame_alloc();
@@ -170,7 +205,6 @@ static AVFrame *amf_amfsurface_to_avframe(AVCodecContext *avctx, AMFSurface* pSu
     if (!frame)
         return NULL;
 
-    AMF_MEMORY_TYPE type = pSurface->pVtbl->GetMemoryType(pSurface);
     amf_copy_surface(avctx, frame, pSurface);
     pSurface->pVtbl->Acquire(pSurface);
     return frame;
@@ -184,6 +218,7 @@ static int ff_amf_receive_frame(AVCodecContext *avctx, AVFrame *frame)
     AMF_RESULT  ret;
     AMFSurface *surface;
     AMFData *data_out = NULL;
+    AVFrame *data;
 
     if (!ctx->decoder)
         return AVERROR(EINVAL);
@@ -202,18 +237,26 @@ static int ff_amf_receive_frame(AVCodecContext *avctx, AVFrame *frame)
         data_out->pVtbl->QueryInterface(data_out, &guid, (void**)&surface); // query for buffer interface
         data_out->pVtbl->Release(data_out);
     }
-    frame = amf_amfsurface_to_avframe(avctx, surface);
+    data = amf_amfsurface_to_avframe(avctx, surface);
     // copy props
-    //frame->format = outlink->format;
-    //frame->width  = outlink->w;
-    //frame->height = outlink->h;
+    data->format = amf_amf_to_av_format(surface->pVtbl->GetFormat(surface));
+    data->width  = avctx->width;
+    data->height = avctx->height;
 
-    //frame->hw_frames_ctx = av_buffer_ref(ctx->hwframes_out_ref);
-    if (!frame->hw_frames_ctx)
-    {
-        ret = AVERROR(ENOMEM);
-        goto fail;
-    }
+//    frame->hw_frames_ctx = av_buffer_ref(ctx->hw_frames_ctx);
+
+//    if (!frame->hw_frames_ctx)
+//    {
+//        ret = AVERROR(ENOMEM);
+//        goto fail;
+//    }
+    av_frame_move_ref(frame, data);
+//    if ((ret = av_frame_ref(frame, data)) < 0)
+//    {
+//        av_log(avctx, AV_LOG_ERROR,  "av_frame_ref failed");
+//        goto fail;
+//    }
+    return ret;
 fail:
     av_frame_free(&frame);
     return ret;
@@ -352,7 +395,7 @@ int amf_decode_frame(AVCodecContext *avctx, void *data,
     AMFBuffer * buf;
     AMF_RESULT res = BufferFromPacket(avctx, avpkt, &buf);
     AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, 0, "Cannot convert AVPacket to AMFbuffer");
-    AVFrame *frame    = data;
+    AVFrame *frame = data;
 
     if (!avpkt->size)
     {
@@ -368,10 +411,12 @@ int amf_decode_frame(AVCodecContext *avctx, void *data,
         res = ctx->decoder->pVtbl->SubmitInput(ctx->decoder, buf);
         if (res == AMF_OK)
         {
+            av_log(avctx, AV_LOG_ERROR, "\nsubmit successful\n");
             break;
         }
         else if (res == AMF_INPUT_FULL || res == AMF_DECODER_NO_FREE_SURFACES)
         {
+            av_log(avctx, AV_LOG_ERROR, "\nsubmit Failed: input full\n");
             res = ff_amf_receive_frame(avctx, frame);
             if (res == AMF_OK)
             {
