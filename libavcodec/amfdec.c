@@ -9,9 +9,6 @@
 
 #define propNotFound 0
 
-
-
-
 static void amf_free_amfsurface(void *opaque, uint8_t *data)
 {
     AMFSurface *surface = (AMFSurface*)(opaque);
@@ -73,20 +70,7 @@ static int amf_init_decoder_context(AVCodecContext *avctx)
     return 0;
 }
 
-int ff_amf_decode_init(AVCodecContext *avctx)
-{
-    int ret;
-
-    if ((ret = amf_init_decoder_context(avctx)) == 0) {
-        if ((ret = amf_init_decoder(avctx)) == 0) {
-            return 0;
-        }
-    }
-    ff_amf_decode_close(avctx);
-    return ret;
-}
-
-int ff_amf_decode_close(AVCodecContext *avctx)
+static int ff_amf_decode_close(AVCodecContext *avctx)
 {
     AvAmfDecoderContext *ctx = avctx->priv_data;
 
@@ -106,6 +90,20 @@ int ff_amf_decode_close(AVCodecContext *avctx)
     av_buffer_unref(&ctx->amf_device_ctx);
 
     return 0;
+
+}
+
+static int ff_amf_decode_init(AVCodecContext *avctx)
+{
+    int ret;
+
+    if ((ret = amf_init_decoder_context(avctx)) == 0) {
+        if ((ret = amf_init_decoder(avctx)) == 0) {
+            return 0;
+        }
+    }
+    ff_amf_decode_close(avctx);
+    return ret;
 }
 
 static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* surface, AVFrame *frame)
@@ -155,7 +153,6 @@ static int ff_amf_receive_frame(const AVCodecContext *avctx, AVFrame *frame)
 
     ret = data_out->pVtbl->Convert(data_out, AMF_MEMORY_HOST);
     AMF_RETURN_IF_FALSE(avctx, ret == AMF_OK, AMF_UNEXPECTED, L"Convert(amf::AMF_MEMORY_HOST) failed with error %d\n");
-    //AMFAV_GOTO_FAIL_IF_FALSE(avctx, ret == AMF_OK, AVERROR_UNKNOWN, "Convert(amf::AMF_MEMORY_HOST) failed with error %d\n", ret);
 
     if (data_out)
     {
@@ -169,8 +166,6 @@ static int ff_amf_receive_frame(const AVCodecContext *avctx, AVFrame *frame)
     AMFAV_GOTO_FAIL_IF_FALSE(avctx, ret == AMF_OK, AVERROR_UNKNOWN, "Failed to convert AMFSurface to AVFrame", ret);
 
     av_frame_move_ref(frame, data);
-
-    return ret;
 fail:
     if (data) {
         av_frame_free(&data);
@@ -196,7 +191,7 @@ static void AMF_STD_CALL  update_buffer_video_duration(AVCodecContext *avctx, AM
     }
 }
 
-static AMF_RESULT UpdateBufferProperties(AVCodecContext *avctx, AMFBuffer* pBuffer, const AVPacket* pPacket)
+static AMF_RESULT amf_update_buffer_properties(AVCodecContext *avctx, AMFBuffer* pBuffer, const AVPacket* pPacket)
 {
     AvAmfDecoderContext *ctx = avctx->priv_data;
     AMFContext *ctxt = ctx->context;
@@ -206,7 +201,7 @@ static AMF_RESULT UpdateBufferProperties(AVCodecContext *avctx, AMFBuffer* pBuff
     AMF_RETURN_IF_FALSE(ctxt, pPacket != NULL, AMF_INVALID_ARG, "UpdateBufferProperties() - packet not passed in");
 
     const amf_int64  pts = av_rescale_q(pPacket->dts, avctx->time_base, AMF_TIME_BASE_Q);
-    //pBuffer->pVtbl->SetPts(pBuffer, pts - GetMinPosition());
+    pBuffer->pVtbl->SetPts(pBuffer, pts);// - GetMinPosition());
     if (pPacket != NULL)
     {
         //AMFVariantStruct var;
@@ -267,7 +262,7 @@ static AMF_RESULT UpdateBufferProperties(AVCodecContext *avctx, AMFBuffer* pBuff
     return AMF_OK;
 }
 
-static AMF_RESULT BufferFromPacket(AVCodecContext *avctx, const AVPacket* pPacket, AMFBuffer** ppBuffer)
+static AMF_RESULT amf_buffer_from_packet(AVCodecContext *avctx, const AVPacket* pPacket, AMFBuffer** ppBuffer)
 {
     AvAmfDecoderContext *ctx = avctx->priv_data;
     AMFContext *ctxt = ctx->context;
@@ -301,12 +296,10 @@ static AMF_RESULT BufferFromPacket(AVCodecContext *avctx, const AVPacket* pPacke
 
     // now that we created the buffer, it's time to update
     // it's properties from the packet information...
-    return UpdateBufferProperties(avctx, pBuffer, pPacket);
+    return amf_update_buffer_properties(avctx, pBuffer, pPacket);
 }
 
-
-
-int amf_decode_frame(AVCodecContext *avctx, void *data,
+static int amf_decode_frame(AVCodecContext *avctx, void *data,
                        int *got_frame, AVPacket *avpkt)
 {
     AvAmfDecoderContext *ctx = avctx->priv_data;
@@ -325,7 +318,7 @@ int amf_decode_frame(AVCodecContext *avctx, void *data,
         return 0;
     }
 
-    res = BufferFromPacket(avctx, avpkt, &buf);
+    res = amf_buffer_from_packet(avctx, avpkt, &buf);
     AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, 0, "Cannot convert AVPacket to AMFbuffer");
 
     while(1)

@@ -46,19 +46,4 @@ typedef struct AvAmfDecoderContext {
 
 } AvAmfDecoderContext;
 
-/**
-* Common decoder initization function
-*/
-int ff_amf_decode_init(AVCodecContext *avctx);
-/**
-* Common decoder termination function
-*/
-int ff_amf_decode_close(AVCodecContext *avctx);
-
-/**
-* decoding one frame
-*/
-static int amf_decode_frame(AVCodecContext *avctx, void *data, int *got_frame, AVPacket *avpkt);
-
-
 #endif // AVCODEC_AMFDEC_H
