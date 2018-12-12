@@ -5,54 +5,11 @@
 #include "libavutil/imgutils.h"
 #include "libavutil/time.h"
 //#include "../libavutil/Frame.h"
-
+#include "amf.h"
 
 #define propNotFound 0
 
-typedef struct FormatMap {
-    enum AVPixelFormat       av_format;
-    enum AMF_SURFACE_FORMAT  amf_format;
-} FormatMap;
 
-static const FormatMap format_map[] =
-{
-    { AV_PIX_FMT_NV12,       AMF_SURFACE_NV12 },
-
-    { AV_PIX_FMT_BGR0,       AMF_SURFACE_BGRA },
-    { AV_PIX_FMT_BGRA,       AMF_SURFACE_BGRA },
-
-    { AV_PIX_FMT_RGB0,       AMF_SURFACE_RGBA },
-    { AV_PIX_FMT_RGBA,       AMF_SURFACE_RGBA },
-
-    { AV_PIX_FMT_0RGB,       AMF_SURFACE_ARGB },
-    { AV_PIX_FMT_ARGB,       AMF_SURFACE_ARGB },
-
-    { AV_PIX_FMT_GRAY8,      AMF_SURFACE_GRAY8 },
-    { AV_PIX_FMT_YUV420P,    AMF_SURFACE_YUV420P },
-    { AV_PIX_FMT_YUYV422,    AMF_SURFACE_YUY2 },
-};
-
-static enum AMF_SURFACE_FORMAT amf_av_to_amf_format(enum AVPixelFormat fmt)
-{
-    int i;
-    for (i = 0; i < amf_countof(format_map); i++) {
-        if (format_map[i].av_format == fmt) {
-            return format_map[i].amf_format;
-        }
-    }
-    return AMF_SURFACE_UNKNOWN;
-}
-
-static enum AVPixelFormat amf_amf_to_av_format(enum AMF_SURFACE_FORMAT fmt)
-{
-    int i;
-    for (i = 0; i < amf_countof(format_map); i++) {
-        if (format_map[i].amf_format == fmt) {
-            return format_map[i].av_format;
-        }
-    }
-    return AMF_SURFACE_UNKNOWN;
-}
 
 
 static void amf_free_amfsurface(void *opaque, uint8_t *data)
@@ -63,7 +20,7 @@ static void amf_free_amfsurface(void *opaque, uint8_t *data)
 
 static int amf_init_decoder(AVCodecContext *avctx)
 {
-    AVAMFDecoderContext        *ctx = avctx->priv_data;
+    AvAmfDecoderContext        *ctx = avctx->priv_data;
     const wchar_t     *codec_id = NULL;
     AMF_RESULT         res;
     enum AMF_SURFACE_FORMAT formatOut = AMF_SURFACE_NV12;
@@ -101,7 +58,7 @@ static int amf_init_decoder(AVCodecContext *avctx)
 
 static int amf_init_decoder_context(AVCodecContext *avctx)
 {
-    AVAMFDecoderContext *ctx = avctx->priv_data;
+    AvAmfDecoderContext *ctx = avctx->priv_data;
     AVAMFDeviceContext *amf_ctx;
     int ret;
 
@@ -131,7 +88,7 @@ int ff_amf_decode_init(AVCodecContext *avctx)
 
 int ff_amf_decode_close(AVCodecContext *avctx)
 {
-    AVAMFDecoderContext *ctx = avctx->priv_data;
+    AvAmfDecoderContext *ctx = avctx->priv_data;
 
     if (ctx->decoder) {
         ctx->decoder->pVtbl->Terminate(ctx->decoder);
@@ -154,7 +111,6 @@ int ff_amf_decode_close(AVCodecContext *avctx)
 static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* surface, AVFrame *frame)
 {
     AMFPlane *plane;
-    AMF_RESULT  ret = AMF_OK;
     int       i;
 
     if (!frame)
@@ -173,7 +129,7 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* su
                                          surface,
                                          AV_BUFFER_FLAG_READONLY);
 
-    frame->format = amf_amf_to_av_format(surface->pVtbl->GetFormat(surface));
+    frame->format = amf_to_av_format(surface->pVtbl->GetFormat(surface));
     frame->width  = avctx->width;
     frame->height = avctx->height;
     //TODO: pts, duration, etc
@@ -183,7 +139,7 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* su
 
 static int ff_amf_receive_frame(const AVCodecContext *avctx, AVFrame *frame)
 {
-    AVAMFDecoderContext *ctx = avctx->priv_data;
+    AvAmfDecoderContext *ctx = avctx->priv_data;
     AMF_RESULT  ret;
     AMFSurface *surface = NULL;
     AVFrame *data = NULL;
@@ -225,7 +181,7 @@ fail:
     return ret;
 }
 
-static void AMF_STD_CALL  UpdateBufferVideoDuration(AVCodecContext *avctx, AMFBuffer* pBuffer, const AVPacket* pPacket)
+static void AMF_STD_CALL  update_buffer_video_duration(AVCodecContext *avctx, AMFBuffer* pBuffer, const AVPacket* pPacket)
 {
     if (pPacket->duration != 0)
     {
@@ -242,7 +198,7 @@ static void AMF_STD_CALL  UpdateBufferVideoDuration(AVCodecContext *avctx, AMFBu
 
 static AMF_RESULT UpdateBufferProperties(AVCodecContext *avctx, AMFBuffer* pBuffer, const AVPacket* pPacket)
 {
-    AVAMFDecoderContext *ctx = avctx->priv_data;
+    AvAmfDecoderContext *ctx = avctx->priv_data;
     AMFContext *ctxt = ctx->context;
     AMF_RESULT res;
 
@@ -304,7 +260,7 @@ static AMF_RESULT UpdateBufferProperties(AVCodecContext *avctx, AMFBuffer* pBuff
         }
     }
     AMF_ASSIGN_PROPERTY_DATA(res, Int64, pBuffer, FFMPEG_DEMUXER_BUFFER_TYPE, AMF_STREAM_VIDEO);
-    UpdateBufferVideoDuration(avctx, pBuffer, pPacket);
+    update_buffer_video_duration(avctx, pBuffer, pPacket);
 
     AMF_ASSIGN_PROPERTY_DATA(res, Int64, pBuffer, FFMPEG_DEMUXER_BUFFER_STREAM_INDEX, pPacket->stream_index);
     AMF_RETURN_IF_FALSE(res == AMF_OK, ctxt, res, L"Failed to set property");
@@ -313,7 +269,7 @@ static AMF_RESULT UpdateBufferProperties(AVCodecContext *avctx, AMFBuffer* pBuff
 
 static AMF_RESULT BufferFromPacket(AVCodecContext *avctx, const AVPacket* pPacket, AMFBuffer** ppBuffer)
 {
-    AVAMFDecoderContext *ctx = avctx->priv_data;
+    AvAmfDecoderContext *ctx = avctx->priv_data;
     AMFContext *ctxt = ctx->context;
     void *pMem;
     AMF_RESULT err;
@@ -353,7 +309,7 @@ static AMF_RESULT BufferFromPacket(AVCodecContext *avctx, const AVPacket* pPacke
 int amf_decode_frame(AVCodecContext *avctx, void *data,
                        int *got_frame, AVPacket *avpkt)
 {
-    AVAMFDecoderContext *ctx = avctx->priv_data;
+    AvAmfDecoderContext *ctx = avctx->priv_data;
 
     AMFBuffer * buf;
     AMF_RESULT res;
@@ -377,18 +333,16 @@ int amf_decode_frame(AVCodecContext *avctx, void *data,
         res = ctx->decoder->pVtbl->SubmitInput(ctx->decoder, buf);
         if (res == AMF_OK)
         {
-            av_log(avctx, AV_LOG_ERROR, "\nsubmit successful\n");
             break;
         }
         else if (res == AMF_INPUT_FULL || res == AMF_DECODER_NO_FREE_SURFACES)
         {
-            av_log(avctx, AV_LOG_ERROR, "\nsubmit Failed: input full\n");
             res = ff_amf_receive_frame(avctx, frame);
             if (res == AMF_OK)
             {
                 AMF_RETURN_IF_FALSE(avctx, !*got_frame, avpkt->size, "frame already got");
                 *got_frame = 1;
-                av_usleep(1000);
+                av_usleep(1);
             }
         }
         else
@@ -406,7 +360,7 @@ static void amf_decode_flush(AVCodecContext *avctx)
     i+=2;
 }
 
-#define OFFSET(x) offsetof(AVAMFDecoderContext, x)
+#define OFFSET(x) offsetof(AvAmfDecoderContext, x)
 #define VD AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
 
 static const AVOption options[] = {
@@ -423,31 +377,19 @@ static const AVClass amf_decode_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-const enum AVPixelFormat ff_amf_pix_fmts1[] = {
-    AV_PIX_FMT_NV12,
-    AV_PIX_FMT_YUV420P,
-#if CONFIG_D3D11VA
-    AV_PIX_FMT_D3D11,
-#endif
-#if CONFIG_DXVA2
-    AV_PIX_FMT_DXVA2_VLD,
-#endif
-    AV_PIX_FMT_NONE
-};
-
 AVCodec ff_amf_decoder = {
     .name           = "amf",
 //    .long_name      = NULL_IF_CONFIG_SMALL("AMD AMF decoder"),
     .long_name      = "AMD AMF decoder",
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_H264,
-    .priv_data_size = sizeof(AVAMFDecoderContext),
+    .priv_data_size = sizeof(AvAmfDecoderContext),
     .priv_class     = &amf_decode_class,
     .init           = ff_amf_decode_init,
     .decode         = amf_decode_frame,
     .flush          = amf_decode_flush,
     .close          = ff_amf_decode_close,
-    .pix_fmts       = ff_amf_pix_fmts1,
+    .pix_fmts       = ff_amf_pix_fmts,
     //.bsfs           = "h264", //TODO: real vcalue
     .capabilities   = AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_DELAY | //TODO: real vcalue
                       AV_CODEC_CAP_AVOID_PROBING,

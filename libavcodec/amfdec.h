@@ -19,7 +19,7 @@
 * AMF encoder context
 */
 
-typedef struct AVAMFDecoderContext {
+typedef struct AvAmfDecoderContext {
     AVClass            *avclass;
 
     AMFContext         *context;
@@ -44,41 +44,20 @@ typedef struct AVAMFDecoderContext {
     int                 decoder_mode;
     int                 timestamp_mode;
 
-} AVAMFDecoderContext;
+} AvAmfDecoderContext;
 
 /**
-* Common encoder initization function
+* Common decoder initization function
 */
 int ff_amf_decode_init(AVCodecContext *avctx);
 /**
-* Common encoder termination function
+* Common decoder termination function
 */
 int ff_amf_decode_close(AVCodecContext *avctx);
 
 /**
-* Ecoding one frame - common function for all AMF encoders
+* decoding one frame
 */
-
-#ifndef AMF_RETURN_IF_FALSE
-/**
-* Error handling helper
-*/
-#define AMF_RETURN_IF_FALSE(avctx, exp, ret_value, /*message,*/ ...) \
-    if (!(exp)) { \
-        av_log(avctx, AV_LOG_ERROR, __VA_ARGS__); \
-        return ret_value; \
-    }
-#endif
-
-#define AMFAV_GOTO_FAIL_IF_FALSE(avctx, exp, ret_value, /*message,*/ ...) \
-    if (!(exp)) { \
-        av_log(avctx, AV_LOG_ERROR, __VA_ARGS__); \
-        ret = ret_value; \
-        goto fail; \
-    }
-
-#define AMF_TIME_BASE_Q          (AVRational){1, AMF_SECOND}
-
 static int amf_decode_frame(AVCodecContext *avctx, void *data, int *got_frame, AVPacket *avpkt);
 
 
