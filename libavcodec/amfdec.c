@@ -4,7 +4,6 @@
 #include <AMF/components/FFMPEGFileDemuxer.h>
 #include "libavutil/imgutils.h"
 #include "libavutil/time.h"
-//#include "../libavutil/Frame.h"
 #include "amf.h"
 
 #define propNotFound 0
@@ -109,6 +108,7 @@ static int ff_amf_decode_init(AVCodecContext *avctx)
 static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* surface, AVFrame *frame)
 {
     AMFPlane *plane;
+    AMFVariantStruct var = {0};
     int       i;
 
     if (!frame)
@@ -130,7 +130,21 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* su
     frame->format = amf_to_av_format(surface->pVtbl->GetFormat(surface));
     frame->width  = avctx->width;
     frame->height = avctx->height;
-    //TODO: pts, duration, etc
+
+    frame->pkt_pts = surface->pVtbl->GetPts(surface);
+
+    surface->pVtbl->GetProperty(surface, L"FFMPEG:dts", &var);
+    frame->pkt_dts = var.int64Value;
+
+    surface->pVtbl->GetProperty(surface, L"FFMPEG:size", &var);
+    frame->pkt_size = var.int64Value;
+
+    //surface->pVtbl->GetProperty(surface, L"FFMPEG:duration", &var);
+    //frame->pkt_duration = var.int64Value;
+    frame->pkt_duration = surface->pVtbl->GetDuration(surface);
+
+    surface->pVtbl->GetProperty(surface, L"FFMPEG:pos", &var);
+    frame->pkt_pos = var.int64Value;
 
     return AMF_OK;
 }
@@ -210,6 +224,7 @@ static AMF_RESULT amf_update_buffer_properties(AVCodecContext *avctx, AMFBuffer*
         AMF_ASSIGN_PROPERTY_INT64(res, pBuffer, L"FFMPEG:stream_index", pPacket->stream_index);
         AMF_ASSIGN_PROPERTY_INT64(res, pBuffer, L"FFMPEG:flags", pPacket->flags);
         AMF_ASSIGN_PROPERTY_INT64(res, pBuffer, L"FFMPEG:duration", pPacket->duration);
+        AMF_ASSIGN_PROPERTY_INT64(res, pBuffer, L"FFMPEG:size", pPacket->size);
         AMF_ASSIGN_PROPERTY_INT64(res, pBuffer, L"FFMPEG:pos", pPacket->pos);
         AMF_ASSIGN_PROPERTY_INT64(res, pBuffer, L"FFMPEG:convergence_duration", pPacket->convergence_duration);
     }
