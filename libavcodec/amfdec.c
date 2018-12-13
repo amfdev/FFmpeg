@@ -370,12 +370,31 @@ static const AVClass amf_decode_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
-AVCodec ff_amf_decoder = {
-    .name           = "amf",
+AVCodec ff_h264_amf_decoder = {
+    .name           = "h264_amf",
 //    .long_name      = NULL_IF_CONFIG_SMALL("AMD AMF decoder"),
     .long_name      = "AMD AMF decoder",
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_H264,
+    .priv_data_size = sizeof(AvAmfDecoderContext),
+    .priv_class     = &amf_decode_class,
+    .init           = ff_amf_decode_init,
+    .decode         = amf_decode_frame,
+    .flush          = amf_decode_flush,
+    .close          = ff_amf_decode_close,
+    .pix_fmts       = ff_amf_pix_fmts,
+    //.bsfs           = "h264", //TODO: real vcalue
+    .capabilities   = AV_CODEC_CAP_HARDWARE | AV_CODEC_CAP_DELAY | //TODO: real vcalue
+                      AV_CODEC_CAP_AVOID_PROBING,
+    .wrapper_name   = "amf",
+};
+
+AVCodec ff_hevc_amf_decoder = {
+    .name           = "hevc_amf",
+//    .long_name      = NULL_IF_CONFIG_SMALL("AMD AMF decoder"),
+    .long_name      = "AMD AMF decoder",
+    .type           = AVMEDIA_TYPE_VIDEO,
+    .id             = AV_CODEC_ID_HEVC,
     .priv_data_size = sizeof(AvAmfDecoderContext),
     .priv_class     = &amf_decode_class,
     .init           = ff_amf_decode_init,
