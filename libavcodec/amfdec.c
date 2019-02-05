@@ -57,16 +57,33 @@ static int amf_init_decoder_context(AVCodecContext *avctx)
     AvAmfDecoderContext *ctx = avctx->priv_data;
     AVAMFDeviceContext *amf_ctx;
     int ret;
+    int err;
 
-    ret = av_hwdevice_ctx_create(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, NULL, NULL, 0);
-    if (ret < 0)
-        return ret;
+    if (avctx->hw_frames_ctx)
+    {
+        err = av_hwdevice_ctx_create_derived(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, avctx->hw_device_ctx, 0);
+        if (err < 0)
+            return err;
+        ctx->hw_device_ref = av_buffer_ref(avctx->hw_device_ctx);
+        if (!ctx->hw_device_ref)
+            return AVERROR(ENOMEM);
+
+        ctx->hw_frames_ref = av_hwframe_ctx_alloc(ctx->hw_device_ref);
+        if (!ctx->hw_frames_ref)
+            return AVERROR(ENOMEM);
+    }
+    else
+    {
+        ret = av_hwdevice_ctx_create(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, NULL, NULL, 0);
+        if (ret < 0)
+            return ret;
+    }
 
     amf_ctx = ((AVHWDeviceContext*)ctx->amf_device_ctx->data)->hwctx;
     ctx->context = amf_ctx->context;
     ctx->factory = amf_ctx->factory;
+
     return ret;
-    return 0;
 }
 
 static int ff_amf_decode_close(AVCodecContext *avctx)
@@ -105,48 +122,146 @@ static int ff_amf_decode_init(AVCodecContext *avctx)
     return ret;
 }
 
-static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* surface, AVFrame *frame)
+static void dumpAvFrame(char * path, const AVFrame *frame)
+{
+    FILE *fp;
+    fp = fopen(path, "ab");
+    if(!fp)
+       return;
+    fprintf(fp,"{\n");
+    fprintf(fp, "    \"best_effort_timestamp\": %d,\n", frame->best_effort_timestamp);
+    fprintf(fp, "    \"best_effort_timestamp\": %d,\n", frame->best_effort_timestamp);
+    fprintf(fp, "    \"channel_layout\": %d,\n", (int)frame->channel_layout);
+    fprintf(fp, "    \"channels\": %d,\n", frame->channels);
+    fprintf(fp, "    \"coded_picture_number\": %d,\n", frame->coded_picture_number);
+    fprintf(fp, "    \"crop_bottom\": %d,\n", (int)frame->crop_bottom);
+    fprintf(fp, "    \"crop_left\": %d,\n", (int)frame->crop_left);
+    fprintf(fp, "    \"crop_right\": %d,\n", (int)frame->crop_right);
+    fprintf(fp, "    \"crop_top\": %d,\n", (int)frame->crop_top);
+    fprintf(fp, "    \"decode_error_flags\": %d,\n", frame->decode_error_flags);
+    fprintf(fp, "    \"display_picture_number\": %d,\n", frame->display_picture_number);
+    fprintf(fp, "    \"flags\": %d,\n", frame->flags);
+    fprintf(fp, "    \"format\": %d,\n", frame->format);
+    fprintf(fp, "    \"height\": %d,\n", frame->height);
+    fprintf(fp, "    \"interlaced_frame\": %d,\n", frame->interlaced_frame);
+    fprintf(fp, "    \"key_frame\": %d,\n", frame->key_frame);
+    fprintf(fp, "    \"nb_extended_buf\": %d,\n", frame->nb_extended_buf);
+    fprintf(fp, "    \"nb_samples\": %d,\n", frame->nb_samples);
+    fprintf(fp, "    \"nb_side_data\": %d,\n", frame->nb_side_data);
+    fprintf(fp, "    \"palette_has_changed\": %d,\n", frame->palette_has_changed);
+    fprintf(fp, "    \"pict_type\": %d,\n", (int)frame->pict_type);
+    fprintf(fp, "    \"pkt_dts\": %d,\n", frame->pkt_dts);
+    fprintf(fp, "    \"pkt_duration\": %d,\n", frame->pkt_duration);
+    fprintf(fp, "    \"pkt_pos\": %d,\n", frame->pkt_pos);
+    fprintf(fp, "    \"pkt_size\": %d,\n", frame->pkt_size);
+    fprintf(fp, "    \"pts\": %d,\n", frame->pts);
+    fprintf(fp, "    \"quality\": %d,\n", frame->quality);
+    fprintf(fp, "    \"reordered_opaque\": %d,\n", frame->reordered_opaque);
+    fprintf(fp, "    \"repeat_pict\": %d,\n", frame->repeat_pict);
+    fprintf(fp, "    \"sample_rate\": %d,\n", frame->sample_rate);
+    fprintf(fp, "    \"top_field_first\": %d,\n", frame->top_field_first);
+    fprintf(fp, "    \"width\": %d,\n", frame->width);
+    fprintf(fp, "    \"sample_aspect_ratio_den\": %d,\n", frame->sample_aspect_ratio.den);
+    fprintf(fp, "    \"sample_aspect_ratio_num\": %d,\n", frame->sample_aspect_ratio.num);
+
+    fprintf(fp, "    \"color_range\": %d,\n", (int)frame->color_range);
+    fprintf(fp, "    \"color_trc\": %d,\n", (int)frame->color_trc);
+    fprintf(fp, "    \"colorspace\": %d,\n", (int)frame->colorspace);
+    fprintf(fp, "    \"pict_type\": %d,\n", (int)frame->pict_type);
+    fprintf(fp,"}\n");
+
+    fclose(fp);
+}
+
+static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* pSurface, AVFrame *frame)
 {
     AMFPlane *plane;
     AMFVariantStruct var = {0};
     int       i;
+    AMF_RESULT  ret = AMF_OK;
 
     if (!frame)
         return AMF_INVALID_POINTER;
 
-    for (i = 0; i < surface->pVtbl->GetPlanesCount(surface); i++)
-    {
-        plane = surface->pVtbl->GetPlaneAt(surface, i);
-        frame->data[i] = plane->pVtbl->GetNative(plane);
-        frame->linesize[i] = plane->pVtbl->GetHPitch(plane);
-    }
-    surface->pVtbl->Acquire(surface);
-    frame->buf[0] = av_buffer_create(NULL,
+    switch (pSurface->pVtbl->GetMemoryType(pSurface))
+        {
+    #if CONFIG_D3D11VA
+            case AMF_MEMORY_DX11:
+            {
+                AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
+                frame->data[0] = plane0->pVtbl->GetNative(plane0);
+                frame->data[1] = (uint8_t*)(intptr_t)0;
+
+                frame->buf[0] = av_buffer_create(NULL,
                                          0,
                                          amf_free_amfsurface,
-                                         surface,
+                                         pSurface,
                                          AV_BUFFER_FLAG_READONLY);
+                pSurface->pVtbl->Acquire(pSurface);
+            }
+            break;
+    #endif
+    #if CONFIG_DXVA2
+            case AMF_MEMORY_DX9:
+            {
+                AMFPlane *plane0 = pSurface->pVtbl->GetPlaneAt(pSurface, 0);
+                frame->data[3] = plane0->pVtbl->GetNative(plane0);
 
-    frame->format = amf_to_av_format(surface->pVtbl->GetFormat(surface));
+                frame->buf[0] = av_buffer_create(NULL,
+                                         0,
+                                         amf_free_amfsurface,
+                                         pSurface,
+                                         AV_BUFFER_FLAG_READONLY);
+                pSurface->pVtbl->Acquire(pSurface);
+            }
+            break;
+    #endif
+        default:
+            {
+                ret = pSurface->pVtbl->Convert(pSurface, AMF_MEMORY_HOST);
+                AMF_RETURN_IF_FALSE(avctx, ret == AMF_OK, AMF_UNEXPECTED, L"Convert(amf::AMF_MEMORY_HOST) failed with error %d\n");
+
+                for (i = 0; i < pSurface->pVtbl->GetPlanesCount(pSurface); i++)
+                {
+                    plane = pSurface->pVtbl->GetPlaneAt(pSurface, i);
+                    frame->data[i] = plane->pVtbl->GetNative(plane);
+                    frame->linesize[i] = plane->pVtbl->GetHPitch(plane);
+                }
+                pSurface->pVtbl->Acquire(pSurface);
+                frame->buf[0] = av_buffer_create(NULL,
+                                                     0,
+                                                     amf_free_amfsurface,
+                                                     pSurface,
+                                                     AV_BUFFER_FLAG_READONLY);
+            }
+        }
+
+//    for (i = 0; i < pSurface->pVtbl->GetPlanesCount(pSurface); i++)
+//    {
+//        frame->linesize[i] = plane->pVtbl->GetHPitch(plane);
+//    }
+
+    frame->format = amf_to_av_format(pSurface->pVtbl->GetFormat(pSurface));
     frame->width  = avctx->width;
     frame->height = avctx->height;
 
-    frame->pkt_pts = surface->pVtbl->GetPts(surface);
+    frame->pkt_pts = pSurface->pVtbl->GetPts(pSurface);
 
-    surface->pVtbl->GetProperty(surface, L"FFMPEG:dts", &var);
+    pSurface->pVtbl->GetProperty(pSurface, L"FFMPEG:dts", &var);
     frame->pkt_dts = var.int64Value;
 
-    surface->pVtbl->GetProperty(surface, L"FFMPEG:size", &var);
+    pSurface->pVtbl->GetProperty(pSurface, L"FFMPEG:size", &var);
     frame->pkt_size = var.int64Value;
 
     //surface->pVtbl->GetProperty(surface, L"FFMPEG:duration", &var);
     //frame->pkt_duration = var.int64Value;
-    frame->pkt_duration = surface->pVtbl->GetDuration(surface);
+    frame->pkt_duration = pSurface->pVtbl->GetDuration(pSurface);
 
-    surface->pVtbl->GetProperty(surface, L"FFMPEG:pos", &var);
+    pSurface->pVtbl->GetProperty(pSurface, L"FFMPEG:pos", &var);
     frame->pkt_pos = var.int64Value;
 
-    return AMF_OK;
+    dumpAvFrame("e:/tmp/frames/amfdec.json", frame);
+    return ret;
 }
 
 static int ff_amf_receive_frame(const AVCodecContext *avctx, AVFrame *frame)
@@ -164,9 +279,6 @@ static int ff_amf_receive_frame(const AVCodecContext *avctx, AVFrame *frame)
     AMFAV_GOTO_FAIL_IF_FALSE(avctx, ret == AMF_OK, AVERROR_UNKNOWN, "QueryOutput() failed with error %d\n", ret);
 
     AMFAV_GOTO_FAIL_IF_FALSE(avctx, data_out, AVERROR_UNKNOWN, "QueryOutput() return empty data %d\n", ret);
-
-    ret = data_out->pVtbl->Convert(data_out, AMF_MEMORY_HOST);
-    AMF_RETURN_IF_FALSE(avctx, ret == AMF_OK, AMF_UNEXPECTED, L"Convert(amf::AMF_MEMORY_HOST) failed with error %d\n");
 
     if (data_out)
     {
@@ -364,8 +476,9 @@ static int amf_decode_frame(AVCodecContext *avctx, void *data,
 
 static void amf_decode_flush(AVCodecContext *avctx)
 {
-    int i = 5;
-    i+=2;
+    AMF_RESULT res = AMF_OK;
+    AvAmfDecoderContext *ctx = avctx->priv_data;
+    res = ctx->decoder->pVtbl->Flush(ctx->decoder);
 }
 
 #define OFFSET(x) offsetof(AvAmfDecoderContext, x)
@@ -374,7 +487,7 @@ static void amf_decode_flush(AVCodecContext *avctx)
 static const AVOption options[] = {
     //Decoder mode
     { "decoder_mode",          "Decoder mode",        OFFSET(decoder_mode),  AV_OPT_TYPE_INT,   { .i64 = AMF_VIDEO_DECODER_MODE_REGULAR      }, AMF_VIDEO_DECODER_MODE_REGULAR, AMF_VIDEO_DECODER_MODE_LOW_LATENCY, VD, "decoder_mode" },
-    { "timestamp_mode",          "Timestamp mode",        OFFSET(timestamp_mode),  AV_OPT_TYPE_INT,   { .i64 = AMF_TS_PRESENTATION      }, AMF_TS_PRESENTATION, AMF_TS_DECODE, VD, "timestamp_mode" },
+    { "timestamp_mode",        "Timestamp mode",        OFFSET(timestamp_mode),  AV_OPT_TYPE_INT,   { .i64 = AMF_TS_PRESENTATION      }, AMF_TS_PRESENTATION, AMF_TS_DECODE, VD, "timestamp_mode" },
     { NULL }
 };
 
