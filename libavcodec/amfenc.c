@@ -703,44 +703,45 @@ int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
                 AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_PICTURE_TYPE_IDR);
             }
         } else if (avctx->codec->id == AV_CODEC_ID_HEVC) {
-        switch (frame->pict_type) {
-        case AV_PICTURE_TYPE_I:
-            AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_I);
-            break;
-        case AV_PICTURE_TYPE_P:
-            AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_P);
-            break;
-        case AV_PICTURE_TYPE_B:
-            av_log(ctx, AV_LOG_WARNING, "Ignoring B-Frame, unsupported by AMD AMF H.265 Encoder.");
-            break;
-        case AV_PICTURE_TYPE_S:
-            AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_SKIP);
-            break;
-        default:
-            AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_NONE);
-            break;
-        }
-        // Keyframe overrides previous assignment.
-        if (frame->key_frame) {
-            AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_IDR);
-        }
-
-        // submit surface
-        res = ctx->encoder->pVtbl->SubmitInput(ctx->encoder, (AMFData*)surface);
-        if (res == AMF_INPUT_FULL) { // handle full queue
-            //store surface for later submission
-            ctx->delayed_surface = surface;
-            if (surface->pVtbl->GetMemoryType(surface) == AMF_MEMORY_DX11) {
-                av_frame_ref(ctx->delayed_frame, frame);
+            switch (frame->pict_type) {
+            case AV_PICTURE_TYPE_I:
+                AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_I);
+                break;
+            case AV_PICTURE_TYPE_P:
+                AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_P);
+                break;
+            case AV_PICTURE_TYPE_B:
+                av_log(ctx, AV_LOG_WARNING, "Ignoring B-Frame, unsupported by AMD AMF H.265 Encoder.");
+                break;
+            case AV_PICTURE_TYPE_S:
+                AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_SKIP);
+                break;
+            default:
+                AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_NONE);
+                break;
             }
-        } else {
-            surface->pVtbl->Release(surface);
-            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "SubmitInput() failed with error %d\n", res);
-
-            if ((ret = timestamp_queue_enqueue(avctx, frame->pts)) < 0) {
-                return ret;
+            // Keyframe overrides previous assignment.
+            if (frame->key_frame) {
+                AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE, AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_IDR);
             }
 
+            // submit surface
+            res = ctx->encoder->pVtbl->SubmitInput(ctx->encoder, (AMFData*)surface);
+            if (res == AMF_INPUT_FULL) { // handle full queue
+                //store surface for later submission
+                ctx->delayed_surface = surface;
+                if (surface->pVtbl->GetMemoryType(surface) == AMF_MEMORY_DX11) {
+                    av_frame_ref(ctx->delayed_frame, frame);
+                }
+            } else {
+                surface->pVtbl->Release(surface);
+                AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "SubmitInput() failed with error %d\n", res);
+
+                if ((ret = timestamp_queue_enqueue(avctx, frame->pts)) < 0) {
+                    return ret;
+                }
+
+            }
         }
     }
     return 0;
