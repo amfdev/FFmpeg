@@ -31,6 +31,7 @@
 #include "libavutil/mem.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/time.h"
+#include "libavutil/pixdesc.h"
 
 #include "amfenc.h"
 #include "internal.h"
@@ -311,8 +312,19 @@ static int amf_init_context(AVCodecContext *avctx)
             if (res == AMF_OK) {
                 av_log(avctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via D3D9.\n");
             } else {
-                av_log(avctx, AV_LOG_ERROR, "AMF initialisation failed via D3D9: error %d.\n", res);
-                return AVERROR(ENOSYS);
+                AMFGuid guid = IID_AMFContext1();
+                res = ctx->context->pVtbl->QueryInterface(ctx->context, &guid, (void**)&ctx->context1);
+                AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext1() failed with error %d\n", res);
+
+                res = ctx->context1->pVtbl->InitVulkan(ctx->context1, NULL);
+                if (res != AMF_OK) {
+                    if (res == AMF_NOT_SUPPORTED)
+                        av_log(avctx, AV_LOG_ERROR, "AMF via Vulkan is not supported on the given device.\n");
+                    else
+                        av_log(avctx, AV_LOG_ERROR, "AMF failed to initialise on the given Vulkan device: %d.\n", res);
+                    return AVERROR(ENOSYS);
+                }
+                av_log(avctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via Vulkan.\n");
             }
         }
     }
@@ -373,6 +385,11 @@ int av_cold ff_amf_encode_close(AVCodecContext *avctx)
         ctx->context->pVtbl->Release(ctx->context);
         ctx->context = NULL;
     }
+    if (ctx->context1) {
+        ctx->context1->pVtbl->Terminate(ctx->context1);
+        ctx->context1->pVtbl->Release(ctx->context1);
+        ctx->context1 = NULL;
+    }
     av_buffer_unref(&ctx->hw_device_ctx);
     av_buffer_unref(&ctx->hw_frames_ctx);
 
@@ -414,6 +431,66 @@ static int amf_copy_surface(AVCodecContext *avctx, const AVFrame *frame,
     av_image_copy(dst_data, dst_linesize,
         (const uint8_t**)frame->data, frame->linesize, frame->format,
         avctx->width, avctx->height);
+
+    return 0;
+}
+
+static void amf_copy_plane_yuv420_to_NV12(uint8_t *dst, uint8_t *src1, uint8_t *src2,
+                                   int dst_linesize, int src_linesize,
+                                   ptrdiff_t bytewidth, int height)
+{
+    int i;
+    int k;
+
+    for (i = 0; i < height; ++i)
+    {
+        for (k = 0; k < bytewidth; ++k)
+        {
+            *(dst + k * 2) = *(src1 + k);
+            *(dst + k * 2 + 1) = *(src2 + k);
+        }
+
+        dst += dst_linesize;
+        src1 += src_linesize;
+        src2 += src_linesize;
+    }
+}
+
+static int amf_copy_surface_to_NV12(AVCodecContext *avctx, const AVFrame *frame,
+    AMFSurface* surface)
+{
+    AMFPlane *plane;
+    uint8_t  *dst_data[4];
+    int       dst_linesize[4];
+    int       planes;
+    int       h;
+    ptrdiff_t bwidth;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(AV_PIX_FMT_NV12);
+
+    planes = surface->pVtbl->GetPlanesCount(surface);
+    av_assert0(planes < FF_ARRAY_ELEMS(dst_data));
+
+    plane = surface->pVtbl->GetPlaneAt(surface, 0);
+    dst_data[0] = plane->pVtbl->GetNative(plane);
+    dst_linesize[0] = plane->pVtbl->GetHPitch(plane);
+
+    bwidth = av_image_get_linesize(AV_PIX_FMT_NV12, avctx->width, 0);
+    if (bwidth < 0) {
+        av_log(NULL, AV_LOG_ERROR, "av_image_get_linesize failed\n");
+        return 0;
+    }
+
+    av_image_copy_plane(dst_data[0], dst_linesize[0],
+               frame->data[0], frame->linesize[0],
+               bwidth, avctx->height);
+
+    bwidth = av_image_get_linesize(AV_PIX_FMT_NV12, avctx->width, 1);
+    h = AV_CEIL_RSHIFT(avctx->height, desc->log2_chroma_h);
+    plane = surface->pVtbl->GetPlaneAt(surface, 1);
+
+    dst_linesize[1] = dst_linesize[0];
+    amf_copy_plane_yuv420_to_NV12(&plane->pVtbl->GetNative(plane)[0], &frame->data[1][0], &frame->data[2][0],
+            plane->pVtbl->GetHPitch(plane), frame->linesize[1], bwidth, h);
 
     return 0;
 }
@@ -644,9 +721,18 @@ int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
 #endif
         default:
             {
-                res = ctx->context->pVtbl->AllocSurface(ctx->context, AMF_MEMORY_HOST, ctx->format, avctx->width, avctx->height, &surface);
-                AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "AllocSurface() failed  with error %d\n", res);
-                amf_copy_surface(avctx, frame, surface);
+                if (ctx->context1 && ctx->format != AMF_SURFACE_NV12)
+                {
+                    res = ctx->context->pVtbl->AllocSurface(ctx->context, AMF_MEMORY_HOST, AMF_SURFACE_NV12, avctx->width, avctx->height, &surface);
+                    AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "AllocSurface() failed  with error %d\n", res);
+                    amf_copy_surface_to_NV12(avctx, frame, surface);
+                }
+                else
+                {
+                    res = ctx->context->pVtbl->AllocSurface(ctx->context, AMF_MEMORY_HOST, ctx->format, avctx->width, avctx->height, &surface);
+                    AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR(ENOMEM), "AllocSurface() failed  with error %d\n", res);
+                    amf_copy_surface(avctx, frame, surface);
+                }
             }
             break;
         }
