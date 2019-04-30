@@ -475,18 +475,16 @@ static int amf_copy_surface_to_NV12(AVCodecContext *avctx, const AVFrame *frame,
         av_log(NULL, AV_LOG_ERROR, "av_image_get_linesize failed\n");
         return 0;
     }
-
     av_image_copy_plane(dst_data[0], dst_linesize[0],
                frame->data[0], frame->linesize[0],
                bwidth, avctx->height);
 
-    bwidth = av_image_get_linesize(AV_PIX_FMT_NV12, avctx->width, 1);
     h = AV_CEIL_RSHIFT(avctx->height, desc->log2_chroma_h);
     plane = surface->pVtbl->GetPlaneAt(surface, 1);
 
     dst_linesize[1] = dst_linesize[0];
     amf_copy_plane_yuv420_to_NV12(&plane->pVtbl->GetNative(plane)[0], &frame->data[1][0], &frame->data[2][0],
-            plane->pVtbl->GetHPitch(plane), frame->linesize[1], bwidth, h);
+            plane->pVtbl->GetHPitch(plane), frame->linesize[1], frame->width / 2, h);
 
     return 0;
 }
