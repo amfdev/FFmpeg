@@ -53,7 +53,8 @@ typedef struct AmfContext {
 
     amf_uint64          version; ///< version of AMF runtime
     AmfTraceWriter      tracer;  ///< AMF writer registered with AMF
-    AMFContext         *context; ///< AMF context
+    AMFContext        *context; ///< AMF context
+    AMFContext1       *context1;
     //encoder
     AMFComponent       *encoder; ///< AMF encoder object
     amf_bool            eof;     ///< flag indicating EOF happened
