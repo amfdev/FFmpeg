@@ -213,6 +213,7 @@ static int amf_init_from_dxva2_device(AVCodecContext *avctx, AVDXVA2DeviceContex
 static int amf_init_context(AVCodecContext *avctx)
 {
     AmfContext *ctx = avctx->priv_data;
+    AMFContext1 *context1 = NULL;
     AMF_RESULT  res;
     av_unused int ret;
 
@@ -234,7 +235,6 @@ static int amf_init_context(AVCodecContext *avctx)
     ctx->trace->pVtbl->SetWriterLevel(ctx->trace, FFMPEG_AMF_WRITER_ID, AMF_TRACE_TRACE);
 
     res = ctx->factory->pVtbl->CreateContext(ctx->factory, &ctx->context);
-    ctx->context1 = NULL;
     AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext() failed with error %d\n", res);
 
     // If a device was passed to the encoder, try to initialise from that.
@@ -313,10 +313,11 @@ static int amf_init_context(AVCodecContext *avctx)
                 av_log(avctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via D3D9.\n");
             } else {
                 AMFGuid guid = IID_AMFContext1();
-                res = ctx->context->pVtbl->QueryInterface(ctx->context, &guid, (void**)&ctx->context1);
+                res = ctx->context->pVtbl->QueryInterface(ctx->context, &guid, (void**)&context1);
                 AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext1() failed with error %d\n", res);
 
-                res = ctx->context1->pVtbl->InitVulkan(ctx->context1, NULL);
+                res = context1->pVtbl->InitVulkan(context1, NULL);
+                context1->pVtbl->Release(context1);
                 if (res != AMF_OK) {
                     if (res == AMF_NOT_SUPPORTED)
                         av_log(avctx, AV_LOG_ERROR, "AMF via Vulkan is not supported on the given device.\n");
@@ -386,11 +387,6 @@ int av_cold ff_amf_encode_close(AVCodecContext *avctx)
         ctx->context = NULL;
     }
 
-    if (ctx->context1) {
-        ctx->context1->pVtbl->Terminate(ctx->context1);
-        ctx->context1->pVtbl->Release(ctx->context1);
-        ctx->context1 = NULL;
-    }
     av_buffer_unref(&ctx->hw_device_ctx);
     av_buffer_unref(&ctx->hw_frames_ctx);
 
@@ -595,8 +591,8 @@ static void amf_release_buffer_with_frame_ref(AMFBuffer *frame_ref_storage_buffe
 
 int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame)
 {
-    AmfContext *ctx = avctx->priv_data;
-    AMFSurface *surface;
+    AmfContext  *ctx = avctx->priv_data;
+    AMFSurface  *surface;
     AMF_RESULT  res;
     int         ret;
 
