@@ -28,6 +28,13 @@
 
 #include "avcodec.h"
 
+enum AMF_VIDEO_ENCODER_PREFFERED_ENGINE
+{
+    AMF_VIDEO_ENCODER_ENGINE_DEFAULT = 0,
+    AMF_VIDEO_ENCODER_ENGINE_DX9,
+    AMF_VIDEO_ENCODER_ENGINE_DX11,
+    AMF_VIDEO_ENCODER_ENGINE_VULKAN
+};
 
 /**
 * AMF trace writer callback class
@@ -86,6 +93,7 @@ typedef struct AmfContext {
     int                 quality;
     int                 b_frame_delta_qp;
     int                 ref_b_frame_delta_qp;
+    int                 engine;
 
     // Dynamic options, can be set after Init() call
 
