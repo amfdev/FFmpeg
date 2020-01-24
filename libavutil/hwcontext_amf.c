@@ -155,6 +155,7 @@ static int amf_device_create(AVHWDeviceContext *ctx, const char *device,
                                 AVDictionary *opts, int flags)
 {
     AVAMFDeviceContext *amf_ctx = ctx->hwctx;
+    AMFContext1 *context1 = NULL;
     AMF_RESULT res;
     int err;
 
@@ -170,8 +171,20 @@ static int amf_device_create(AVHWDeviceContext *ctx, const char *device,
         if (res == AMF_OK) {
             av_log(ctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via D3D9.\n");
         } else {
-            av_log(ctx, AV_LOG_ERROR, "AMF initialisation failed via D3D9: error %d.\n", res);
-            return AVERROR(ENOSYS);
+            AMFGuid guid = IID_AMFContext1();
+            res = amf_ctx->context->pVtbl->QueryInterface(amf_ctx->context, &guid, (void**)&context1);
+            AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext1() failed with error %d\n", res);
+
+            res = context1->pVtbl->InitVulkan(context1, NULL);
+            context1->pVtbl->Release(context1);
+            if (res != AMF_OK) {
+                if (res == AMF_NOT_SUPPORTED)
+                    av_log(ctx, AV_LOG_ERROR, "AMF via Vulkan is not supported on the given device.\n");
+                else
+                    av_log(ctx, AV_LOG_ERROR, "AMF failed to initialise on the given Vulkan device: %d.\n", res);
+                return AVERROR(ENOSYS);
+            }
+            av_log(ctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via Vulkan.\n");
         }
     }
     return 0;
