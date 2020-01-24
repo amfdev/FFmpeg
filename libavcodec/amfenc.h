@@ -19,25 +19,13 @@
 #ifndef AVCODEC_AMFENC_H
 #define AVCODEC_AMFENC_H
 
-#include <AMF/core/Factory.h>
-
 #include <AMF/components/VideoEncoderVCE.h>
 #include <AMF/components/VideoEncoderHEVC.h>
 
 #include "libavutil/fifo.h"
+#include "libavutil/hwcontext_amf.h"
 
 #include "avcodec.h"
-
-
-/**
-* AMF trace writer callback class
-* Used to capture all AMF logging
-*/
-
-typedef struct AmfTraceWriter {
-    AMFTraceWriterVtbl *vtbl;
-    AVCodecContext     *avctx;
-} AmfTraceWriter;
 
 /**
 * AMF encoder context
@@ -45,15 +33,11 @@ typedef struct AmfTraceWriter {
 
 typedef struct AmfContext {
     AVClass            *avclass;
-    // access to AMF runtime
-    amf_handle          library; ///< handle to DLL library
-    AMFFactory         *factory; ///< pointer to AMF factory
-    AMFDebug           *debug;   ///< pointer to AMF debug interface
-    AMFTrace           *trace;   ///< pointer to AMF trace interface
 
-    amf_uint64          version; ///< version of AMF runtime
-    AmfTraceWriter      tracer;  ///< AMF writer registered with AMF
-    AMFContext         *context; ///< AMF context
+    AMFContext         *context;
+    AMFFactory         *factory;
+    AVBufferRef        *amf_device_ctx;
+
     //encoder
     AMFComponent       *encoder; ///< AMF encoder object
     amf_bool            eof;     ///< flag indicating EOF happened
