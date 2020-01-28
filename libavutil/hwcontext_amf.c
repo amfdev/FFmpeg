@@ -41,6 +41,7 @@
 #else
 #include <dlfcn.h>
 #endif
+#include "libavutil/opt.h"
 
 /**
 * Error handling helper
@@ -151,42 +152,103 @@ static int amf_init_device_ctx_object(AVHWDeviceContext *ctx)
     return 0;
 }
 
+static AMF_RESULT amf_context_init_d3d11(AVHWDeviceContext *avctx)
+{
+    AMF_RESULT res;
+    AVAMFDeviceContext *ctx = avctx->hwctx;
+    res = ctx->context->pVtbl->InitDX11(ctx->context, NULL, AMF_DX11_1);
+    if (res == AMF_OK) {
+        av_log(avctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via D3D11.\n");
+    }
+    return res;
+}
+
+static AMF_RESULT amf_context_init_dxva2(AVHWDeviceContext *avctx)
+{
+    AMF_RESULT res;
+    AVAMFDeviceContext *ctx = avctx->hwctx;
+    res = ctx->context->pVtbl->InitDX9(ctx->context, NULL);
+    if (res == AMF_OK) {
+        av_log(avctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via dxva2.\n");
+    }
+    return res;
+}
+
+static AMF_RESULT amf_context_init_vulkan(AVHWDeviceContext *avctx)
+{
+    AMF_RESULT res;
+    AVAMFDeviceContext *ctx = avctx->hwctx;
+    AMFContext1 *context1 = NULL;
+    AMFGuid guid = IID_AMFContext1();
+
+    res = ctx->context->pVtbl->QueryInterface(ctx->context, &guid, (void**)&context1);
+    AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext1() failed with error %d\n", res);
+
+    res = context1->pVtbl->InitVulkan(context1, NULL);
+    context1->pVtbl->Release(context1);
+    if (res != AMF_OK) {
+        if (res == AMF_NOT_SUPPORTED)
+            av_log(avctx, AV_LOG_ERROR, "AMF via Vulkan is not supported on the given device.\n");
+        else
+            av_log(avctx, AV_LOG_ERROR, "AMF failed to initialise on the given Vulkan device: %d.\n", res);
+        return AMF_FAIL;
+    }
+    av_log(avctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via Vulkan.\n");
+    return res;
+}
+
 static int amf_device_create(AVHWDeviceContext *ctx, const char *device,
                                 AVDictionary *opts, int flags)
 {
-    AVAMFDeviceContext *amf_ctx = ctx->hwctx;
-    AMFContext1 *context1 = NULL;
     AMF_RESULT res;
     int err;
+    AVDictionaryEntry *e;
+    int prefferedEngine = AMF_VIDEO_ENCODER_ENGINE_DEFAULT;
 
     err = amf_init_device_ctx_object(ctx);
     if(err < 0)
         return err;
 
-    res = amf_ctx->context->pVtbl->InitDX11(amf_ctx->context, NULL, AMF_DX11_1);
-    if (res == AMF_OK) {
-        av_log(ctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via D3D11.\n");
-    } else {
-        res = amf_ctx->context->pVtbl->InitDX9(amf_ctx->context, NULL);
-        if (res == AMF_OK) {
-            av_log(ctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via D3D9.\n");
-        } else {
-            AMFGuid guid = IID_AMFContext1();
-            res = amf_ctx->context->pVtbl->QueryInterface(amf_ctx->context, &guid, (void**)&context1);
-            AMFAV_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext1() failed with error %d\n", res);
+    e = av_dict_get(opts, "engine", NULL, 0);
+    if (!!e)
+    {
+        prefferedEngine = atoi(e->value);
+    }
 
-            res = context1->pVtbl->InitVulkan(context1, NULL);
-            context1->pVtbl->Release(context1);
+    res = AMF_FAIL;
+    switch (prefferedEngine) {
+    case AMF_VIDEO_ENCODER_ENGINE_D3D11:
+        res = amf_context_init_d3d11(ctx);
+        break;
+    case AMF_VIDEO_ENCODER_ENGINE_DXVA2:
+        res = amf_context_init_dxva2(ctx);
+        break;
+    case AMF_VIDEO_ENCODER_ENGINE_VULKAN:
+        res = amf_context_init_vulkan(ctx);
+        break;
+    default:
+       break;
+    }
+    if (res != AMF_OK) {
+        if (prefferedEngine != AMF_VIDEO_ENCODER_ENGINE_DEFAULT)
+            av_log(ctx, AV_LOG_ERROR, "AMF failed to initialise via preffered engine\n");
+
+        if (prefferedEngine != AMF_VIDEO_ENCODER_ENGINE_D3D11)//already tried in switch case
+            res = amf_context_init_d3d11(ctx);
+
+        if (res != AMF_OK) {
+            if (prefferedEngine != AMF_VIDEO_ENCODER_ENGINE_DXVA2)
+                res = amf_context_init_dxva2(ctx);
             if (res != AMF_OK) {
-                if (res == AMF_NOT_SUPPORTED)
-                    av_log(ctx, AV_LOG_ERROR, "AMF via Vulkan is not supported on the given device.\n");
-                else
-                    av_log(ctx, AV_LOG_ERROR, "AMF failed to initialise on the given Vulkan device: %d.\n", res);
-                return AVERROR(ENOSYS);
+                if (prefferedEngine != AMF_VIDEO_ENCODER_ENGINE_VULKAN)
+                    res = amf_context_init_vulkan(ctx);
             }
-            av_log(ctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via Vulkan.\n");
         }
     }
+    if (res != AMF_OK) {
+        return AVERROR(ENOSYS);
+    }
+
     return 0;
 }
 

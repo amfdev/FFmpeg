@@ -30,6 +30,13 @@
 #include "AMF/core/Context.h"
 #include "AMF/core/Factory.h"
 
+enum AMF_VIDEO_ENCODER_PREFFERED_ENGINE
+{
+    AMF_VIDEO_ENCODER_ENGINE_DEFAULT = 0,
+    AMF_VIDEO_ENCODER_ENGINE_DXVA2,
+    AMF_VIDEO_ENCODER_ENGINE_D3D11,
+    AMF_VIDEO_ENCODER_ENGINE_VULKAN
+};
 
 /**
  * This struct is allocated as AVHWDeviceContext.hwctx

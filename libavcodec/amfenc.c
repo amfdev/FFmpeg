@@ -124,7 +124,16 @@ static int amf_init_context(AVCodecContext *avctx)
         if (ret < 0)
             return ret;
     } else {
-        ret = av_hwdevice_ctx_create(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, NULL, NULL, 0);
+        AVDictionary *dict = NULL;
+
+#if defined(_WIN32)
+        if (ctx->engine) {
+            ret = av_dict_set_int(&dict, "engine", ctx->engine, 0);
+            if (ret < 0)
+               return ret;
+        }
+#endif
+        ret = av_hwdevice_ctx_create(&ctx->amf_device_ctx, AV_HWDEVICE_TYPE_AMF, NULL, dict, 0);
         if (ret < 0)
             return ret;
     }
