@@ -26,6 +26,7 @@
 #include "libavutil/hwcontext_amf.h"
 
 #include "avcodec.h"
+#include "amf.h"
 
 /**
 * AMF encoder context
@@ -117,19 +118,5 @@ int ff_amf_encode_close(AVCodecContext *avctx);
 
 int ff_amf_send_frame(AVCodecContext *avctx, const AVFrame *frame);
 int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt);
-
-/**
-* Supported formats
-*/
-extern const enum AVPixelFormat ff_amf_pix_fmts[];
-
-/**
-* Error handling helper
-*/
-#define AMF_RETURN_IF_FALSE(avctx, exp, ret_value, /*message,*/ ...) \
-    if (!(exp)) { \
-        av_log(avctx, AV_LOG_ERROR, __VA_ARGS__); \
-        return ret_value; \
-    }
 
 #endif //AVCODEC_AMFENC_H
