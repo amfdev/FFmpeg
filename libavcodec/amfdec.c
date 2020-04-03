@@ -173,6 +173,68 @@ static void dumpAvFrame(char * path, const AVFrame *frame)
     fclose(fp);
 }
 
+static void dumpAMFSurface(char * path, const AMFData *surface)
+{
+    FILE *fp;
+    fp = fopen(path, "ab");
+    if(!fp)
+       return;
+    AMF_RESULT res = AMF_OK;
+
+    int count = surface->pVtbl->GetPropertyCount(surface);
+    fprintf(fp,"{\n");
+    fprintf(fp, "\"count \": %d,\n", count);
+    int i;
+    AMFVariantStruct    var = {0};
+    res = AMFVariantInit(&var);
+
+    for (i = 0; i < count; ++i)
+    {
+        wchar_t name[100];
+        amf_size nameSize = 40;
+
+        res = surface->pVtbl->GetPropertyAt(surface, i, &name, nameSize, &var);
+
+        switch (var.type) {
+        case AMF_VARIANT_BOOL:
+            fprintf(fp, "    \"%S\":  %s,\n", name, var.boolValue == true?"true":"false");
+            break;
+        case AMF_VARIANT_INT64:
+            fprintf(fp, "    \"%S\":  %d,\n", name, var.int64Value);
+            break;
+        case AMF_VARIANT_DOUBLE:
+            fprintf(fp, "    \"%S\":  %f,\n", name, var.doubleValue);
+            break;
+        case AMF_VARIANT_STRING:
+            fprintf(fp, "    \"%S\":  \"%s\",\n", name, var.stringValue);
+            break;
+        case AMF_VARIANT_WSTRING:
+            fprintf(fp, "    \"%S\":  %S\n", name, var.wstringValue);
+            break;
+        case AMF_VARIANT_RATE:
+            fprintf(fp, "    \"%S\":  \"%d:%d\",\n", name, var.rateValue.num, var.rateValue.den);
+            break;
+        case AMF_VARIANT_RATIO:
+            fprintf(fp, "    \"%S\":  \"%d:%d\",\n", name, var.ratioValue.num, var.ratioValue.den);
+            break;
+        case AMF_VARIANT_SIZE:
+            fprintf(fp, "    \"%S\":  \"%d - %d\",\n", name, var.sizeValue.width, var.sizeValue.height);
+            break;
+        case AMF_VARIANT_POINT:
+            fprintf(fp, "    \"%S\":  \"%d - %d\",\n", name, var.pointValue.x, var.pointValue.y);
+            break;
+        case AMF_VARIANT_COLOR:
+            fprintf(fp, "    \"%S\":  \"%d.%d.%d.%d\",\n", name, var.colorValue.r, var.colorValue.g, var.colorValue.b, var.colorValue.a);
+            break;
+        default:
+            fprintf(fp, "    \"%S\":  \"%s\",\n", name, "type_AMFInterface -----------------------------------------");
+            break;
+        }
+    }
+    fprintf(fp,"}\n");
+    fclose(fp);
+}
+
 static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* pSurface, AVFrame *frame)
 {
     AMFPlane *plane;
@@ -253,14 +315,15 @@ static int amf_amfsurface_to_avframe(AVCodecContext *avctx, const AMFSurface* pS
     pSurface->pVtbl->GetProperty(pSurface, L"FFMPEG:size", &var);
     frame->pkt_size = var.int64Value;
 
-    //surface->pVtbl->GetProperty(surface, L"FFMPEG:duration", &var);
-    //frame->pkt_duration = var.int64Value;
+    pSurface->pVtbl->GetProperty(pSurface, L"FFMPEG:duration", &var);
+    frame->pkt_duration = var.int64Value;
     frame->pkt_duration = pSurface->pVtbl->GetDuration(pSurface);
 
     pSurface->pVtbl->GetProperty(pSurface, L"FFMPEG:pos", &var);
     frame->pkt_pos = var.int64Value;
 
     dumpAvFrame("e:/tmp/frames/amfdec.json", frame);
+    dumpAMFSurface("e:/tmp/frames/amfdec_surf.json", pSurface);
     return ret;
 }
 
